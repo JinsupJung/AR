@@ -7,10 +7,11 @@
     margin: 0 auto;
 }
 
-/* 테이블 레이아웃을 자동으로 설정하여 컬럼이 데이터 크기에 맞게 조정되도록 함 */
+/* 테이블 레이아웃을 고정하여 컬럼 너비가 일관되도록 설정 */
 .table-custom {
-    table-layout: auto; /* 고정 레이아웃을 사용하지 않음 */
-    width: 100%;
+    table-layout: fixed; /* 고정 레이아웃 사용 */
+    width: 100%; /* 테이블 전체 너비를 컨테이너에 맞춤 */
+    border-collapse: collapse; /* 테두리 겹침 방지 */
 }
 
 /* 컬럼 별 너비 설정 */
@@ -19,7 +20,11 @@
 }
 
 .col-outlet-name {
-    min-width: 200px; /* 매출처명 컬럼 최소 너비, 데이터 크기에 따라 확장됨 */
+    min-width: 350px; /* 매출처명 컬럼 최소 너비를 300px로 증가 */
+    max-width: 500px; /* 필요시 최대 너비 설정 */
+    white-space: nowrap; /* 텍스트가 줄바꿈되지 않도록 설정 */
+    overflow: hidden; /* 넘치는 텍스트 숨기기 */
+    text-overflow: ellipsis; /* 넘치는 텍스트를 '...'으로 표시 */
 }
 
 .col-collector-key {
@@ -32,9 +37,6 @@
 
 .col-debit, .col-credit {
     width: 80px; /* 일별 발주 및 입금 컬럼 너비 */
-    /* 아래 CSS는 Option 3에 해당, 이미 템플릿에서 text-right 클래스를 사용했으므로 필요 없음
-    text-align: right;
-    */
 }
 
 /* 숫자 컬럼 오른쪽 정렬 (이미 Bootstrap의 text-right 클래스 사용) */
@@ -52,4 +54,22 @@
     .container-custom {
         overflow-x: auto;
     }
+}
+
+/* 고정 헤더 스타일 추가 */
+.table-custom thead th {
+    position: sticky;
+    top: 0;
+    background-color: #f8f9fa; /* 헤더 배경색 설정 */
+    z-index: 2; /* 헤더가 스크롤 시 다른 셀 위에 표시되도록 설정 */
+    box-shadow: 0 2px 2px -1px rgba(0, 0, 0, 0.4); /* 헤더에 약간의 그림자 추가 */
+    font-weight: bold; /* 헤더 텍스트 강조 */
+}
+
+/* 테이블 본문 스크롤 시 전체 높이를 제한하고 스크롤 가능하도록 설정 */
+.table-container {
+    max-height: 600px; /* 원하는 높이로 조정 가능 */
+    overflow-y: auto;
+    overflow-x: auto; /* 가로 스크롤 추가 */
+    position: relative;
 }
