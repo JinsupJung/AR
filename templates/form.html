@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8">
+    <title>트랜잭션 입력</title>
+  </head>
+  <body>
+    <h1>트랜잭션 입력</h1>
+    <form action="/submit" method="post">
+      <label for="chain_no">Chain No:</label><br>
+      <input type="text" id="chain_no" name="chain_no" required><br><br>
+      <label for="amount">Amount:</label><br>
+      <input type="number" id="amount" name="amount" required><br><br>
+      <!-- 추가 필드들 -->
+      <input type="submit" value="제출">
+    </form>
+  </body>
+</html>

@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>발주 내역 엑셀 업로드</title>
+    <!-- Bootstrap CSS 등 필요한 스타일 추가 -->
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+</head>
+<body>
+    <div class="container mt-5">
+        <h1>발주 내역 엑셀 업로드</h1>
+        <br>
+        <h4><엑셀을 아래 포멧에 맞춰서 업로드 해주십시오.></h4>
+        <h3>order_date, representative_code, full_name, order_amount, collector_key </h3>
+        <h4>2024-11-05	1310003	을지로6가보쌈부대	1370908	100108</h4>    
+        <h4>2024-11-05	1315218	개봉보쌈부대삼겹본능	673092	101445</h4>    
+
+        <br>
+           
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            {% for category, message in messages %}
+              <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                {{ message }}
+                <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+                  <span aria-hidden="true">&times;</span>
+                </button>
+              </div>
+            {% endfor %}
+          {% endif %}
+        {% endwith %}
+        <form method="POST" enctype="multipart/form-data">
+            {{ form.hidden_tag() }}
+            <div class="form-group">
+                {{ form.file.label(class="form-label") }}
+                {{ form.file(class="form-control-file", id="file") }}
+            </div>
+            <div class="form-group">
+                {{ form.submit(class="btn btn-primary") }}
+            </div>
+        </form>
+    </div>
+    <!-- jQuery 및 Bootstrap JS 추가 -->
+    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

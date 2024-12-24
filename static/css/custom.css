@@ -1,0 +1,55 @@
+/* static/css/custom.css */
+
+/* 커스텀 컨테이너 스타일 */
+.container-custom {
+    max-width: 1800px;
+    width: 100%;
+    margin: 0 auto;
+}
+
+/* 테이블 레이아웃을 자동으로 설정하여 컬럼이 데이터 크기에 맞게 조정되도록 함 */
+.table-custom {
+    table-layout: auto; /* 고정 레이아웃을 사용하지 않음 */
+    width: 100%;
+}
+
+/* 컬럼 별 너비 설정 */
+.col-rep-code {
+    width: 100px; /* 대표코드 컬럼 너비 */
+}
+
+.col-outlet-name {
+    min-width: 200px; /* 매출처명 컬럼 최소 너비, 데이터 크기에 따라 확장됨 */
+}
+
+.col-collector-key {
+    width: 150px; /* Collector_Key 컬럼 너비 */
+}
+
+.col-manager {
+    min-width: 150px; /* 담당 컬럼 최소 너비, 데이터 크기에 따라 확장됨 */
+}
+
+.col-debit, .col-credit {
+    width: 80px; /* 일별 발주 및 입금 컬럼 너비 */
+    /* 아래 CSS는 Option 3에 해당, 이미 템플릿에서 text-right 클래스를 사용했으므로 필요 없음
+    text-align: right;
+    */
+}
+
+/* 숫자 컬럼 오른쪽 정렬 (이미 Bootstrap의 text-right 클래스 사용) */
+.numeric {
+    text-align: right;
+}
+
+/* 버튼 간 간격 조정 (옵션) */
+.d-flex.justify-content-between .btn {
+    margin-right: 10px;
+}
+
+/* 반응형 스크롤 활성화 */
+@media (max-width: 1800px) {
+    .container-custom {
+        overflow-x: auto;
+    }
+}

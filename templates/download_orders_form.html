@@ -1,0 +1,89 @@
+<!-- templates/download_orders_form.html -->
+
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>거래명세표 엑셀 다운로드</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css">
+    <style>
+        body {
+            padding-top: 70px;
+        }
+    </style>
+</head>
+<body>
+    <!-- 네비게이션 바 복제 -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark fixed-top">
+        <a class="navbar-brand" href="{{ url_for('index') }}">AR 관리 시스템</a>
+        <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav" 
+                aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+            <ul class="navbar-nav">
+                <!-- 기존 네비게이션 아이템들 -->
+                <li class="nav-item">
+                    <a class="nav-link" href="{{ url_for('add_order') }}">발주 내역 추가</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{ url_for('upload_bank_payments') }}">은행 입금 내역 업로드</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{ url_for('upload_orders') }}">발주 내역 엑셀 업로드</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{ url_for('view_daily_transactions') }}">일별 발주 및 입금 내역 조회</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{ url_for('view_receivables') }}">미수금액 조회</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{ url_for('download_orders_excel_form') }}">거래명세표 엑셀다운로드</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{ url_for('download_web_order_excel') }}">웹발주 엑셀다운로드</a>
+                </li>
+            </ul>
+        </div>
+    </nav>
+    
+    <!-- 플래시 메시지 표시 영역 -->
+    <div class="container mt-4">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            {% for category, message in messages %}
+              <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                {{ message }}
+                <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+                  <span aria-hidden="true">&times;</span>
+                </button>
+              </div>
+            {% endfor %}
+          {% endif %}
+        {% endwith %}
+        
+        <!-- 메인 콘텐츠 영역 -->
+        <div class="card">
+            <div class="card-header">
+                거래명세표 엑셀 다운로드
+            </div>
+            <div class="card-body">
+                <form method="POST" action="{{ url_for('download_orders_excel') }}">
+                    {{ form.hidden_tag() }}
+                    <div class="form-group">
+                        {{ form.order_date.label(class="form-label") }}
+                        {{ form.order_date(class="form-control") }}
+                    </div>
+                    <button type="submit" class="btn btn-success">엑셀 다운로드</button>
+                </form>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Bootstrap JS 및 의존성 추가 -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.0/dist/umd/popper.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/js/bootstrap.min.js"></script>
+</body>
+</html>

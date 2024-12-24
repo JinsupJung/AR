@@ -1,0 +1,86 @@
+<!-- templates/view_receivables.html -->
+{% extends "base.html" %}
+
+{% block title %}미수금액 조회 - AR 관리 시스템{% endblock %}
+
+{% block content %}
+<div class="container mt-5">
+    <h1>미수금액 조회</h1>
+    
+    <!-- 플래시 메시지 표시 -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+            {{ message }}
+            <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+              <span aria-hidden="true">&times;</span>
+            </button>
+          </div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+    
+    <!-- 검색 폼 -->
+    <form method="GET" action="{{ url_for('view_receivables') }}" class="form-inline mb-3">
+        <div class="form-group mr-2">
+            <input type="text" name="search_outlet" class="form-control" placeholder="출고처명 검색" value="{{ search_outlet }}">
+        </div>
+        <button type="submit" class="btn btn-primary">검색</button>
+        <a href="{{ url_for('view_receivables') }}" class="btn btn-secondary ml-2">초기화</a>
+    </form>
+    
+    <table class="table table-bordered">
+        <thead>
+            <tr>
+                <th>고객코드</th>
+                <th>출고처명</th>
+                <th class="text-right">총 차변 (받아야 할 돈)</th>
+                <th class="text-right">총 대변 (받은 돈)</th>
+                <th class="text-right">식자재매출</th>
+                <th class="text-right">로얄티매출</th>
+                <th class="text-right">포스사용료</th>
+                <th class="text-right">현금입금</th>
+                <th class="text-right">카드입금</th>
+                <th class="text-right">미수금액</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in results %}
+            <tr>
+                <td>{{ row.client }}</td>
+                <td>{{ row.outlet_name | default('') }}</td>
+                <td class="text-right">{{ "{:,.0f}".format(row.total_debit | default(0)) }}</td>
+                <td class="text-right">{{ "{:,.0f}".format(row.total_credit | default(0)) }}</td>
+                <td class="text-right">{{ "{:,.0f}".format(row.total_food_material_sales | default(0)) }}</td>
+                <td class="text-right">{{ "{:,.0f}".format(row.total_royalty_sales | default(0)) }}</td>
+                <td class="text-right">{{ "{:,.0f}".format(row.total_pos_usage_fee | default(0)) }}</td>
+                <td class="text-right">{{ "{:,.0f}".format(row.total_cash_deposit | default(0)) }}</td>
+                <td class="text-right">{{ "{:,.0f}".format(row.total_card_deposit | default(0)) }}</td>
+                <td class="text-right">{{ "{:,.0f}".format(row.receivables | default(0)) }}</td>
+            </tr>
+            {% endfor %}
+            {% if not results %}
+            <tr>
+                <td colspan="10" class="text-center">조회된 데이터가 없습니다.</td>
+            </tr>
+            {% endif %}
+        </tbody>
+        <tfoot>
+            {% if results %}
+            <tr>
+                <td colspan="2" class="text-center">합계</td>
+                <td class="text-right">{{ "{:,.0f}".format(sum_total_debit) }}</td>
+                <td class="text-right">{{ "{:,.0f}".format(sum_total_credit) }}</td>
+                <td class="text-right">{{ "{:,.0f}".format(sum_food_material_sales) }}</td>
+                <td class="text-right">{{ "{:,.0f}".format(sum_royalty_sales) }}</td>
+                <td class="text-right">{{ "{:,.0f}".format(sum_pos_usage_fee) }}</td>
+                <td class="text-right">{{ "{:,.0f}".format(sum_cash_deposit) }}</td>
+                <td class="text-right">{{ "{:,.0f}".format(sum_card_deposit) }}</td>
+                <td class="text-right">{{ "{:,.0f}".format(sum_receivables) }}</td>
+            </tr>
+            {% endif %}
+        </tfoot>
+    </table>
+</div>
+{% endblock %}

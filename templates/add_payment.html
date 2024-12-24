@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en"> 
+<head>
+    <meta charset="UTF-8">
+    <title>수금내역 상세</title>
+</head>
+<body>
+    <h1>수금 내역</h1>
+    <form action="/add_payment" method="post">
+        <label for="representative_code">대표코드:</label><br>
+        <input type="text" id="representative_code" name="representative_code" required><br><br>
+        
+        <label for="client_code">매출처:</label><br>
+        <input type="text" id="client_code" name="client_code" required><br><br>
+        
+        <label for="client_name">매출처명:</label><br>
+        <input type="text" id="client_name" name="client_name" required><br><br>
+        
+        <label for="collector_key">Collector Key:</label><br>
+        <input type="text" id="collector_key" name="collector_key"><br><br>
+        
+        <label for="manager">담당:</label><br>
+        <input type="text" id="manager" name="manager"><br><br>
+        
+        <label for="payment_date">발주일자:</label><br>
+        <input type="date" id="payment_date" name="payment_date" required><br><br>
+        
+        <label for="payment_amount">발주금액:</label><br>
+        <input type="number" step="0.01" id="payment_amount" name="payment_amount" required><br><br>
+        
+        <input type="submit" value="Submit">
+    </form>
+    <br>
+    <a href="/">Home</a>
+</body>
+</html>
