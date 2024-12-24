@@ -1,4 +1,3 @@
-<!-- templates/view_receivables.html -->
 {% extends "base.html" %}
 
 {% block title %}미수금액 조회 - AR 관리 시스템{% endblock %}
@@ -43,6 +42,7 @@
                 <th class="text-right">현금입금</th>
                 <th class="text-right">카드입금</th>
                 <th class="text-right">미수금액</th>
+                <th class="text-right">보증금</th> <!-- 보증금 열 추가 -->
             </tr>
         </thead>
         <tbody>
@@ -58,11 +58,12 @@
                 <td class="text-right">{{ "{:,.0f}".format(row.total_cash_deposit | default(0)) }}</td>
                 <td class="text-right">{{ "{:,.0f}".format(row.total_card_deposit | default(0)) }}</td>
                 <td class="text-right">{{ "{:,.0f}".format(row.receivables | default(0)) }}</td>
+                <td class="text-right">{{ "{:,.0f}".format(row.deposit | default(0)) }}</td> <!-- 보증금 값 추가 -->
             </tr>
             {% endfor %}
             {% if not results %}
             <tr>
-                <td colspan="10" class="text-center">조회된 데이터가 없습니다.</td>
+                <td colspan="11" class="text-center">조회된 데이터가 없습니다.</td> <!-- colspan 11로 변경 -->
             </tr>
             {% endif %}
         </tbody>
@@ -78,6 +79,7 @@
                 <td class="text-right">{{ "{:,.0f}".format(sum_cash_deposit) }}</td>
                 <td class="text-right">{{ "{:,.0f}".format(sum_card_deposit) }}</td>
                 <td class="text-right">{{ "{:,.0f}".format(sum_receivables) }}</td>
+                <td class="text-right">{{ "{:,.0f}".format(sum_deposit) }}</td> <!-- 보증금 합계 추가 -->
             </tr>
             {% endif %}
         </tfoot>

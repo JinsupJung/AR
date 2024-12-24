@@ -946,6 +946,7 @@ def upload_orders():
                 db.close()
     return render_template('upload_orders.html', form=form)
 
+
 # 미수금액 조회
 @app.route('/view_receivables', methods=['GET'])
 def view_receivables():
@@ -959,35 +960,38 @@ def view_receivables():
             # 검색 파라미터 가져오기
             search_outlet = request.args.get('search_outlet', '').strip()
 
-            # 기본 쿼리 수정: TRIM과 UPPER을 사용하여 데이터 정제 후 그룹화
+            # 수정된 쿼리: LEFT JOIN 및 집계 함수 추가
             query = """
                 SELECT 
-                    TRIM(UPPER(client)) AS client,
-                    TRIM(UPPER(outlet_name)) AS outlet_name,
-                    SUM(debit) AS total_debit,
-                    SUM(credit) AS total_credit,
-                    SUM(food_material_sales) AS total_food_material_sales,
-                    SUM(royalty_sales) AS total_royalty_sales,
-                    SUM(pos_usage_fee) AS total_pos_usage_fee,
-                    SUM(cash_deposit) AS total_cash_deposit,
-                    SUM(card_deposit) AS total_card_deposit,
-                    SUM(debit) - SUM(credit) AS receivables
+                    TRIM(UPPER(t.client)) AS client,
+                    TRIM(UPPER(t.outlet_name)) AS outlet_name,
+                    SUM(t.debit) AS total_debit,
+                    SUM(t.credit) AS total_credit,
+                    SUM(t.food_material_sales) AS total_food_material_sales,
+                    SUM(t.royalty_sales) AS total_royalty_sales,
+                    SUM(t.pos_usage_fee) AS total_pos_usage_fee,
+                    SUM(t.cash_deposit) AS total_cash_deposit,
+                    SUM(t.card_deposit) AS total_card_deposit,
+                    SUM(t.debit) - SUM(t.credit) AS receivables,
+                    IFNULL(MAX(m.deposit), 0) AS deposit
                 FROM 
-                    ARTransactionsLedger
+                    ARTransactionsLedger AS t
+                LEFT JOIN 
+                    ARClientMaster AS m ON TRIM(UPPER(t.client)) = TRIM(UPPER(m.client_code))
             """
 
             params = []
 
             # 검색 조건 추가
             if search_outlet:
-                query += " WHERE TRIM(UPPER(outlet_name)) LIKE %s"
+                query += " WHERE TRIM(UPPER(t.outlet_name)) LIKE %s"
                 params.append(f"%{search_outlet.upper().strip()}%")
 
-            # GROUP BY client, outlet_name로 변경
+            # GROUP BY 및 ORDER BY 추가
             query += """
                 GROUP BY 
-                    TRIM(UPPER(client)), 
-                    TRIM(UPPER(outlet_name))
+                    TRIM(UPPER(t.client)), 
+                    TRIM(UPPER(t.outlet_name))
                 ORDER BY 
                     client, outlet_name
             """
@@ -1004,11 +1008,12 @@ def view_receivables():
             sum_cash_deposit = sum(row['total_cash_deposit'] for row in results) if results else 0
             sum_card_deposit = sum(row['total_card_deposit'] for row in results) if results else 0
             sum_receivables = sum(row['receivables'] for row in results) if results else 0
+            sum_deposit = sum(row['deposit'] for row in results) if results else 0  # 보증금 합계
 
             # 쿼리 결과 로그 출력
             logging.debug(f"미수금액 조회 결과: {results}")
-
             logging.info("미수금액 조회 성공")
+
             return render_template(
                 'view_receivables.html', 
                 results=results, 
@@ -1020,7 +1025,8 @@ def view_receivables():
                 sum_pos_usage_fee=sum_pos_usage_fee,
                 sum_cash_deposit=sum_cash_deposit,
                 sum_card_deposit=sum_card_deposit,
-                sum_receivables=sum_receivables
+                sum_receivables=sum_receivables,
+                sum_deposit=sum_deposit  # 보증금 합계 전달
             )
     except mysql.connector.Error as db_err:
         logging.error(f"미수금액 조회 실패: {db_err}")
@@ -1033,6 +1039,8 @@ def view_receivables():
     finally:
         db.close()
 
+
+# view_daily_transactions 조회
 def clean_decimal(value):
     """
     문자열에서 숫자와 소수점, 음수 기호만 남기고 제거한 후 Decimal로 변환합니다.
