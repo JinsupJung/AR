@@ -208,7 +208,7 @@ def extract_data(cursor, query):
 
 def save_to_excel(df, path):
     """
-    DataFrame을 지정된 경로의 엑셀 파일로 저장합니다.
+    웹발주 DataFrame을 지정된 경로의 엑셀 파일로 저장합니다.
     """
     df.to_excel(path, index=False)
     logging.info(f"데이터 엑셀로 저장 완료: {path}")
@@ -414,12 +414,13 @@ def etl_process():
                 else:
                     logging.warning(f"'{col}' 컬럼이 데이터프레임에 존재하지 않습니다.")
 
-            # 엑셀로 저장
+            # 웹발주 데이터를 엑셀로 저장
             excel_output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'excel_output')
             os.makedirs(excel_output_dir, exist_ok=True)
             excel_filename = f't_po_order_master_{today_str}_{timestamp}.xlsx'  # 고유한 파일명
             excel_path_step3 = os.path.join(excel_output_dir, excel_filename)
             save_to_excel(df_step3, excel_path_step3)
+            #  여기에 MySQL insert 로직 추가
 
         # 연결 종료
         informix_cursor.close()
