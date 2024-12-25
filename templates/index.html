@@ -71,15 +71,33 @@
             <p class="lead">AR 관리 시스템에 오신 것을 환영합니다. 아래 메뉴를 통해 다양한 기능을 이용하실 수 있습니다.</p>
             <hr class="my-4">
             <p>빠른 접근을 원하시면 네비게이션 바를 이용해 주세요.</p>
-            <a class="btn btn-primary btn-lg" href="{{ url_for('add_order') }}" role="button">발주 내역 추가</a>
-            <a class="btn btn-success btn-lg" href="{{ url_for('upload_bank_payments') }}" role="button">은행 입금 내역 업로드</a>
-            <a class="btn btn-info btn-lg" href="{{ url_for('upload_orders') }}" role="button">발주 내역 엑셀 업로드</a>
-            <a class="btn btn-warning btn-lg" href="{{ url_for('view_daily_transactions') }}" role="button">일별 발주 및 입금 내역 조회</a>
-            <a class="btn btn-danger btn-lg" href="{{ url_for('view_receivables') }}" role="button">미수금액 조회</a>
-            <!-- 새로운 버튼 추가: 거래명세표 엑셀다운로드 -->
-            <a class="btn btn-success btn-lg" href="{{ url_for('download_orders_excel_form') }}" role="button">거래명세표 엑셀다운로드</a>
-            <!-- 기존 버튼 유지: 웹발주 엑셀다운로드 -->
-            <a class="btn btn-secondary btn-lg" href="{{ url_for('download_web_order_excel') }}" role="button">웹발주 엑셀다운로드</a>
+            
+            <!-- 버튼들을 그리드 시스템으로 배치 -->
+            <div class="row">
+                <div class="col-md-3 mb-3">
+                    <a class="btn btn-primary btn-lg btn-block" href="{{ url_for('add_order') }}" role="button">발주 내역 추가</a>
+                </div>
+                <div class="col-md-3 mb-3">
+                    <a class="btn btn-success btn-lg btn-block" href="{{ url_for('upload_bank_payments') }}" role="button">은행 입금 내역 업로드</a>
+                </div>
+                <div class="col-md-3 mb-3">
+                    <a class="btn btn-info btn-lg btn-block" href="{{ url_for('upload_orders') }}" role="button">발주 내역 엑셀 업로드</a>
+                </div>
+                <div class="col-md-3 mb-3">
+                    <a class="btn btn-warning btn-lg btn-block" href="{{ url_for('view_daily_transactions') }}" role="button">일별 발주 및 입금 내역 조회</a>
+                </div>
+            </div>
+            <div class="row">
+                <div class="col-md-4 mb-3">
+                    <a class="btn btn-danger btn-lg btn-block" href="{{ url_for('view_receivables') }}" role="button">미수금액 조회</a>
+                </div>
+                <div class="col-md-4 mb-3">
+                    <a class="btn btn-success btn-lg btn-block" href="{{ url_for('download_orders_excel_form') }}" role="button">거래명세표 엑셀다운로드</a>
+                </div>
+                <div class="col-md-4 mb-3">
+                    <a class="btn btn-secondary btn-lg btn-block" href="{{ url_for('download_web_order_excel') }}" role="button">웹발주 엑셀다운로드</a>
+                </div>
+            </div>
         </div>
     </div>
     
