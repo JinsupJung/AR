@@ -22,6 +22,11 @@ from openpyxl import load_workbook
 from openpyxl.utils import column_index_from_string
 from zipfile import ZipFile
 import tempfile
+import subprocess
+
+# PDF 출력용 0107 추가
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
 
 # .env 파일 로드 (보안을 위해 환경 변수 사용 권장)
 load_dotenv()
@@ -1266,14 +1271,15 @@ def download_file(filename):
     directory = os.path.join(os.getcwd(), 'excel_output')
     return send_from_directory(directory, filename, as_attachment=True, download_name=filename)
 
+
 # ------------------------
-# 8. 추가 라우트: 거래명세표 엑셀 다운로드 폼 및 처리
+# 8. 추가 라우트: 거래명세표 엑셀 및 PDF 다운로드 폼 및 처리
 # ------------------------
 
 @app.route('/download_orders_excel_form', methods=['GET'])
 def download_orders_excel_form():
     """
-    거래명세표 엑셀 다운로드 폼을 표시하는 라우트.
+    거래명세표 엑셀 및 PDF 다운로드 폼을 표시하는 라우트.
     """
     form = DownloadOrdersForm()
     return render_template('download_orders_form.html', form=form)
@@ -1281,24 +1287,24 @@ def download_orders_excel_form():
 @app.route('/download_orders_excel', methods=['POST'])
 def download_orders_excel():
     """
-    사용자로부터 받은 order_date에 따라 거래명세표 엑셀 파일을 생성하고 다운로드하는 라우트.
+    사용자로부터 받은 order_date에 따라 거래명세표 엑셀 및 PDF 파일을 생성하고 다운로드하는 라우트.
     """
     form = DownloadOrdersForm()
     if form.validate_on_submit():
         order_date = form.order_date.data.strftime('%Y-%m-%d')
         try:
-            # ETL 프로세스 실행하여 엑셀 파일 생성
-            excel_file_paths = export_orders_to_excel(order_date)
+            # ETL 프로세스 실행하여 엑셀 및 PDF 파일 생성
+            file_paths = export_orders_to_files(order_date)
             
-            if not excel_file_paths:
-                flash("엑셀 파일이 생성되지 않았습니다.", "danger")
+            if not file_paths:
+                flash("파일이 생성되지 않았습니다.", "danger")
                 return redirect(url_for('download_orders_excel_form'))
             
-            # 생성된 모든 엑셀 파일을 ZIP으로 압축하여 다운로드
+            # 생성된 모든 파일을 ZIP으로 압축하여 다운로드
             with tempfile.TemporaryDirectory() as tmpdirname:
                 zip_path = os.path.join(tmpdirname, f"거래명세표_{order_date}.zip")
                 with ZipFile(zip_path, 'w') as zipf:
-                    for file_path in excel_file_paths:
+                    for file_path in file_paths:
                         zipf.write(file_path, os.path.basename(file_path))
                 return send_from_directory(
                     directory=tmpdirname,
@@ -1308,8 +1314,8 @@ def download_orders_excel():
                 )
             
         except Exception as e:
-            logging.error(f"거래명세표 엑셀 다운로드 중 오류 발생: {e}")
-            flash(f"거래명세표 엑셀 다운로드 중 오류가 발생했습니다: {e}", 'danger')
+            logging.error(f"거래명세표 다운로드 중 오류 발생: {e}")
+            flash(f"거래명세표 다운로드 중 오류가 발생했습니다: {e}", 'danger')
             return redirect(url_for('download_orders_excel_form'))
     else:
         # 폼 검증 실패 시
@@ -1322,7 +1328,7 @@ def download_orders_excel():
 # 9. 공급자 정보 (중복 제거)
 # ------------------------
 
-# 공급자 정보는 이미 코드 상단에 정의되어 있으므로 중복 정의 제거
+# 공급자 정보는 이미 SUPPLIER_INFO 상수로 정의되어 있으므로 추가 정의 제거
 
 # ------------------------
 # 10. 기타 헬퍼 함수 및 로깅 설정
@@ -1330,10 +1336,17 @@ def download_orders_excel():
 
 def setup_export_logging():
     """
-    엑셀 내보내기 전용 로깅 설정 함수.
-    기존 로깅 설정을 재사용하므로 별도의 설정은 필요 없음
+    엑셀/PDF 내보내기 전용 로깅 설정 함수.
     """
-    logging.info("엑셀 내보내기 프로세스 시작.")
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler("export_orders.log"),
+            logging.StreamHandler()
+        ]
+    )
+    logging.info("내보내기 프로세스 시작.")
 
 def get_sqlalchemy_engine():
     """
@@ -1535,6 +1548,10 @@ def generate_excel_file(wb, ws, client_name, order_date, group):
         # 파일명 생성: 거래명세표_고객명_배송일자.xlsx
         sanitized_client_name = re.sub(r'[\\/*?:"<>|]', "_", client_name)  # 파일명에 사용할 수 없는 문자를 _로 대체
         sanitized_order_date = order_date.replace('-', '')
+        
+        if sanitized_client_name == "":
+            sanitized_client_name = "unknown"
+        
         output_filename = f"거래명세표_{sanitized_client_name}_{sanitized_order_date}.xlsx"
         output_path = os.path.join(OUTPUT_FOLDER, output_filename)
         
@@ -1544,6 +1561,43 @@ def generate_excel_file(wb, ws, client_name, order_date, group):
         return output_path
     except Exception as e:
         logging.error(f"엑셀 파일 생성 중 오류 발생 (고객명: {client_name}, 배송일자: {order_date}): {e}")
+        raise e
+
+def convert_excel_to_pdf(excel_path, output_folder):
+    """
+    LibreOffice를 사용하여 엑셀 파일을 PDF로 변환합니다.
+    
+    :param excel_path: 변환할 엑셀 파일의 경로
+    :param output_folder: PDF 파일을 저장할 디렉토리
+    :return: 변환된 PDF 파일의 경로
+    """
+    try:
+        # LibreOffice 명령어 구성
+        command = [
+            'libreoffice',
+            '--headless',
+            '--convert-to', 'pdf',
+            '--outdir', output_folder,
+            excel_path
+        ]
+        logging.info(f"LibreOffice를 사용하여 PDF로 변환 중: {excel_path}")
+        subprocess.run(command, check=True)
+        
+        # 변환된 PDF 파일 경로 추정
+        base_filename = os.path.splitext(os.path.basename(excel_path))[0]
+        pdf_filename = f"{base_filename}.pdf"
+        pdf_path = os.path.join(output_folder, pdf_filename)
+        
+        if not os.path.exists(pdf_path):
+            raise FileNotFoundError(f"PDF 변환이 실패했습니다: {pdf_path}")
+        
+        logging.info(f"PDF 파일이 성공적으로 생성되었습니다: {pdf_path}")
+        return pdf_path
+    except subprocess.CalledProcessError as e:
+        logging.error(f"LibreOffice 변환 오류: {e}")
+        raise e
+    except Exception as e:
+        logging.error(f"PDF 변환 중 오류 발생: {e}")
         raise e
 
 def fetch_data(engine, target_date):
@@ -1597,14 +1651,12 @@ def fetch_data(engine, target_date):
         logging.error(f"데이터 조회 중 오류 발생: {e}")
         return None
 
-# app.py 파일의 맨 아래에 추가
-
-def export_orders_to_excel(order_date):
+def export_orders_to_files(order_date):
     """
-    특정 배송일자에 대한 거래명세표 엑셀 파일을 생성하고 저장합니다.
+    특정 배송일자에 대한 거래명세표 엑셀 및 PDF 파일을 생성하고 저장합니다.
     
     :param order_date: 처리할 배송일자 (YYYY-MM-DD)
-    :return: 생성된 엑셀 파일의 경로 리스트
+    :return: 생성된 파일들의 경로 리스트
     """
     setup_export_logging()
     
@@ -1624,7 +1676,12 @@ def export_orders_to_excel(order_date):
     grouped = df.groupby(['client_code'])
     logging.info(f"배송일자 {order_date}에 대한 데이터는 {len(grouped)}개의 거래처로 나뉩니다.")
     
-    excel_file_paths = []  # 생성된 엑셀 파일 경로를 저장할 리스트
+    # 출력 폴더가 존재하지 않으면 생성
+    if not os.path.exists(OUTPUT_FOLDER):
+        os.makedirs(OUTPUT_FOLDER)
+        logging.info(f"출력 폴더를 생성했습니다: {OUTPUT_FOLDER}")
+    
+    file_paths = []  # 생성된 파일 경로를 저장할 리스트
     
     for client_code, group in grouped:
         client_name = group['client_name'].iloc[0]
@@ -1637,6 +1694,11 @@ def export_orders_to_excel(order_date):
             logging.error(f"데이터 전처리 중 오류 발생 (client_code: {client_code}): {e}")
             continue  # 다음 그룹으로 넘어가기
         
+        # 클라이언트 정보 검증
+        if pd.isna(client_name) or client_name.strip() == "":
+            logging.error(f"클라이언트 이름이 누락되었습니다 (client_code: {client_code}). PDF 및 엑셀 생성을 건너뜁니다.")
+            continue  # 클라이언트 이름이 없으면 건너뜀
+        
         # 엑셀 템플릿 로드
         try:
             wb, ws = load_excel_template()
@@ -1647,13 +1709,29 @@ def export_orders_to_excel(order_date):
         # 엑셀 파일 생성 및 데이터 삽입
         try:
             excel_path = generate_excel_file(wb, ws, client_name, order_date, df_processed)
-            excel_file_paths.append(excel_path)
+            file_paths.append(excel_path)
         except Exception as e:
             logging.error(f"엑셀 파일 생성 중 오류 발생 (client_code: {client_code}, order_date: {order_date}): {e}")
             continue  # 다음 그룹으로 넘어가기
+        
+        # 공급받는자 정보 가져오기
+        client_info = {
+            'full_name': group['full_name'].iloc[0],
+            'reg_no': group['reg_no'].iloc[0],
+            'president': group['president'].iloc[0],
+            'address1': group['address1'].iloc[0]
+        }
+        
+        # PDF 파일 생성 (엑셀을 PDF로 변환)
+        try:
+            pdf_path = convert_excel_to_pdf(excel_path, OUTPUT_FOLDER)
+            file_paths.append(pdf_path)
+        except Exception as e:
+            logging.error(f"PDF 파일 생성 중 오류 발생 (client_code: {client_code}, order_date: {order_date}): {e}")
+            continue  # 다음 그룹으로 넘어가기
     
-    logging.info("모든 엑셀 파일이 성공적으로 생성되었습니다.")
-    return excel_file_paths
+    logging.info("모든 파일이 성공적으로 생성되었습니다.")
+    return file_paths
 
 # ------------------------
 # 9. 기타 라우트 및 기능 (기존 코드 유지)
