@@ -23,8 +23,6 @@ from openpyxl.utils import column_index_from_string
 from zipfile import ZipFile
 import tempfile
 import subprocess
-import uuid
-import threading
 
 # PDF 출력용 0107 추가
 from reportlab.lib.pagesizes import letter
@@ -60,9 +58,6 @@ logging.basicConfig(
     ]
 )
 
-# 전역 딕셔너리: 백그라운드 작업 결과 저장 (task_id -> 결과 파일 경로 리스트)
-background_tasks = {}
-
 # MySQL 연결 설정 함수
 def get_db_connection():
     try:
@@ -78,6 +73,7 @@ def get_db_connection():
     except mysql.connector.Error as err:
         logging.error(f"MySQL 연결 오류: {err}")
         return None
+
 
 # 프로그램 설정
 TEMPLATE_FILE = 'detail_form.xlsx'  # 엑셀 템플릿 파일명
@@ -115,9 +111,12 @@ SUPPLIER_INFO = {
     '주소': '서울특별시 강남구 영동대로 701, W타워 14~15층'
 }
 
+
+
 # 헬퍼 함수: 파일 확장자 확인
 def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 # 폼 정의
 class UploadForm(FlaskForm):
@@ -149,14 +148,7 @@ class DailyTransactionsForm(FlaskForm):
 class DownloadOrdersForm(FlaskForm):
     order_date = DateField('처리할 배송일자', format='%Y-%m-%d', validators=[DataRequired()])
     submit = SubmitField('엑셀 다운로드')
-# 신규 폼 클래스: DownloadClientOrdersForm
 
-class DownloadClientOrdersForm(FlaskForm):
-    # 필수 검증기 제거하여 전체매출처(빈 값)도 허용
-    client_code = SelectField('매출처', choices=[('', '전체매출처')])
-    from_date = DateField('시작일', format='%Y-%m-%d', validators=[DataRequired()])
-    to_date = DateField('종료일', format='%Y-%m-%d', validators=[DataRequired()])
-    submit = SubmitField('거래명세표 생성')
 
 # ------------------------
 # Informix 연결 정보 설정
@@ -170,6 +162,7 @@ informix_username = os.getenv('INFORMIX_USERNAME', 'informix')
 informix_password = os.getenv('INFORMIX_PASSWORD', 'eusr2206')  # 보안을 위해 환경 변수 사용 권장
 jdbc_driver_path = os.getenv('JDBC_DRIVER_PATH', '/opt/IBM/Informix_JDBC_Driver/lib/ifxjdbc.jar')
 
+# Informix JDBC URL 생성 (로케일 설정 유지)
 informix_jdbc_url = (
     f"jdbc:informix-sqli://{informix_hostname}:{informix_port}/{informix_database}:"
     f"INFORMIXSERVER={informix_server};DBLOCALE=en_US.819;CLIENT_LOCALE=en_us.utf8;"
@@ -178,9 +171,15 @@ informix_jdbc_url = (
 # ------------------------
 # 3. 데이터 변환 함수 정의 (ETL용)
 # ------------------------
+
 def convert_to_utf8(value):
+    """
+    Informix 데이터의 인코딩을 UTF-8로 변환합니다.
+    정상 작동되는 함수이므로 절대 수정 금지.
+    """
     if isinstance(value, str):
         try:
+            # 원본 인코딩이 ISO-8859-1로 인코딩된 후 EUC-KR로 디코딩되어야 하는 경우
             temp_byte = value.encode('ISO-8859-1')  # 원본 인코딩에 맞게 수정 필요
             utf8_value = temp_byte.decode('euc-kr')  # Informix 데이터가 EUC-KR 인코딩이라면
             return utf8_value
@@ -190,6 +189,9 @@ def convert_to_utf8(value):
     return value
 
 def check_special_characters(df, columns):
+    """
+    지정된 컬럼에 ASCII 외 문자가 포함된 데이터를 식별하여 로그로 기록합니다.
+    """
     pattern = re.compile(r'[^\x00-\x7F]+')  # ASCII 외 문자 패턴
     for col in columns:
         if col in df.columns:
@@ -201,16 +203,25 @@ def check_special_characters(df, columns):
             logging.warning(f"'{col}' 컬럼이 데이터프레임에 존재하지 않습니다.")
 
 def extract_data(cursor, query):
+    """
+    지정된 쿼리를 실행하고 결과를 Pandas DataFrame으로 반환합니다.
+    """
     cursor.execute(query)
     data = cursor.fetchall()
     columns = [desc[0] for desc in cursor.description]
     return pd.DataFrame(data, columns=columns)
 
 def save_to_excel(df, path):
+    """
+    웹발주 DataFrame을 지정된 경로의 엑셀 파일로 저장합니다.
+    """
     df.to_excel(path, index=False)
     logging.info(f"데이터 엑셀로 저장 완료: {path}")
 
 def log_query_string(query):
+    """
+    쿼리 문자열에 비ASCII 문자가 있는지 확인하고 로그로 기록.
+    """
     non_ascii = [char for char in query if ord(char) > 127]
     if non_ascii:
         logging.warning("쿼리 문자열에 비ASCII 문자가 포함되어 있습니다:")
@@ -221,466 +232,6 @@ def log_query_string(query):
 # ------------------------
 # 6. ETL 프로세스 함수 정의
 # ------------------------
-def fetch_client_data(engine, from_date, to_date, client_code):
-    try:
-        query = f"""
-            SELECT 
-                a.order_date,
-                a.rep_code,
-                a.rep_name,
-                a.client_code,
-                a.client_name,
-                a.item_code,
-                a.item_name,
-                a.cond,
-                a.unit,
-                a.qty,
-                a.cal_qty,
-                a.unit_price,
-                a.order_amount,
-                a.vat,
-                a.total_amount,
-                a.tax,
-                c.full_name,       -- 매출처명 (cm_chain의 full_name)
-                c.reg_no,          -- 매출처 등록번호
-                c.president,       -- 매출처 대표자
-                c.address1         -- 매출처 주소
-            FROM {AR_ORDER_DETAILS_ITEM_TABLE} a
-            INNER JOIN {CM_CHAIN_TABLE} c 
-              ON a.client_code COLLATE utf8mb4_unicode_ci = c.chain_no COLLATE utf8mb4_unicode_ci
-            WHERE a.order_date BETWEEN '{from_date}' AND '{to_date}'
-        """
-        if client_code and client_code.strip() != "":
-            query += f" AND a.client_code = '{client_code.strip()}'"
-        query += " ORDER BY a.order_date, a.client_code"
-        logging.debug(f"fetch_client_data 쿼리: {query}")
-        df = pd.read_sql(query, engine)
-        logging.info(f"MySQL에서 데이터를 성공적으로 조회했습니다. 총 {len(df)}개의 레코드.")
-        return df
-    except Exception as e:
-        logging.error(f"매출처 데이터 조회 중 오류 발생: {e}", exc_info=True)
-        return None
-
-def export_client_orders_to_files(from_date, to_date, client_code):
-    logging.debug("export_client_orders_to_files 함수 시작 (일자별 출력)")
-    logging.info(f"매개변수: from_date={from_date}, to_date={to_date}, client_code='{client_code}'")
-    
-    engine = get_sqlalchemy_engine()
-    if engine is None:
-        logging.error("SQLAlchemy 엔진 생성 실패")
-        raise ConnectionError("SQLAlchemy 엔진 생성 실패")
-    
-    df = fetch_client_data(engine, from_date, to_date, client_code)
-    logging.info(f"fetch_client_data 완료: {len(df)} 행 조회됨")
-    if df.empty:
-        logging.error("조회된 데이터가 없습니다.")
-        raise ValueError("조회된 데이터가 없습니다.")
-    
-    try:
-        df['order_date'] = pd.to_datetime(df['order_date'], errors='coerce').dt.strftime('%Y-%m-%d')
-        logging.debug("데이터 전처리 완료")
-    except Exception as e:
-        logging.error(f"데이터 전처리 오류: {e}", exc_info=True)
-        raise e
-
-    file_paths = []
-    # 그룹화 조건: 전체매출처이면 (client_code가 빈 값) 날짜와 client_code별, 특정 매출처이면 날짜별로 그룹화
-    if client_code.strip() == "":
-        grouped = df.groupby(['order_date', 'client_code'])
-    else:
-        grouped = df.groupby(['order_date'])
-    
-    for group_keys, group in grouped:
-        if isinstance(group_keys, tuple):
-            day_str, client_grp = group_keys
-        else:
-            day_str = group_keys
-        logging.info(f"처리 그룹: {group_keys}")
-        try:
-            wb = load_workbook(TEMPLATE_FILE)
-            ws = wb.active
-            client_name = group['client_name'].iloc[0] if 'client_name' in group.columns else "unknown"
-            excel_path = generate_excel_file(wb, ws, client_name, day_str, group)
-            file_paths.append(excel_path)
-            logging.info(f"{day_str} 엑셀 파일 생성 완료: {excel_path}")
-            try:
-                pdf_path = convert_excel_to_pdf(excel_path, OUTPUT_FOLDER)
-                file_paths.append(pdf_path)
-                logging.info(f"{day_str} PDF 파일 생성 완료: {pdf_path}")
-            except Exception as e:
-                logging.error(f"PDF 변환 오류 ({day_str}): {e}", exc_info=True)
-        except Exception as e:
-            logging.error(f"엑셀 파일 생성 오류 ({group_keys}): {e}", exc_info=True)
-    
-    logging.debug("export_client_orders_to_files 함수 종료 (일자별 출력)")
-    return file_paths
-
-def generate_excel_file(wb, ws, client_name, order_date, group):
-    try:
-        client_info = {
-            'full_name': group['full_name'].iloc[0],
-            'reg_no': group['reg_no'].iloc[0],
-            'president': group['president'].iloc[0],
-            'address1': group['address1'].iloc[0]
-        }
-        insert_data_to_excel(wb, ws, SUPPLIER_INFO, client_info, order_date, group.to_dict('records'))
-        sanitized_client_name = re.sub(r'[\\/*?:"<>|]', "_", client_name)  # 파일명에 사용할 수 없는 문자를 _로 대체
-        sanitized_order_date = order_date.replace('-', '')
-        if sanitized_client_name == "":
-            sanitized_client_name = "unknown"
-        output_filename = f"거래명세표_{sanitized_client_name}_{sanitized_order_date}.xlsx"
-        output_path = os.path.join(OUTPUT_FOLDER, output_filename)
-        wb.save(output_path)
-        logging.info(f"엑셀 파일이 성공적으로 저장되었습니다: {output_path}")
-        return output_path
-    except Exception as e:
-        logging.error(f"엑셀 파일 생성 중 오류 발생 (고객명: {client_name}, 배송일자: {order_date}): {e}")
-        raise e
-
-def insert_data_to_excel(wb, ws, supplier_info, client_info, order_date, data_rows):
-    ws['G3'] = supplier_info['등록번호']
-    ws['G4'] = supplier_info['상호 (법인명)']
-    ws['G5'] = supplier_info['성명']
-    ws['G6'] = supplier_info['주소']
-    reg_no = client_info.get('reg_no', '-').replace('-', '')  # 하이픈 제거
-    reg_no = reg_no.ljust(10, '-')[:10]  # 10자리 맞추기
-    reg_no_cells = ['V3', 'W3', 'X3', 'Z3', 'AA3', 'AC3', 'AD3', 'AE3', 'AF3', 'AG3']
-    for cell, char in zip(reg_no_cells, reg_no):
-        column_letters = ''.join(filter(str.isalpha, cell))
-        row_num = int(''.join(filter(str.isdigit, cell)))
-        column_num = column_index_from_string(column_letters)
-        insert_cell_value(ws, row_num, column_num, char)
-    ws['V4'] = f"{client_info.get('full_name', '-')}"
-    ws['V5'] = f"{client_info.get('president', '-')}"
-    ws['V6'] = f"{client_info.get('address1', '-')}"
-    if data_rows:
-        rep_name = data_rows[0].get('rep_name', '-')
-        ws['U2'] = rep_name
-    else:
-        ws['U2'] = '-'
-    ws['A2'] = f"{order_date}"
-    current_row = 8
-    total_order_amount = 0.0
-    total_vat = 0.0
-    for row in data_rows:
-        try:
-            insert_cell_value(ws, current_row, 1, row['item_name'])
-            insert_cell_value(ws, current_row, 14, row['unit'])
-            insert_cell_value(ws, current_row, 17, float(row['qty']))
-            insert_cell_value(ws, current_row, 21, float(row['unit_price']))
-            insert_cell_value(ws, current_row, 26, float(row['order_amount']))
-            insert_cell_value(ws, current_row, 30, float(row['vat']))
-            total_order_amount += float(row['order_amount'])
-            total_vat += float(row['vat'])
-            current_row +=1
-        except Exception as e:
-            logging.error(f"데이터 삽입 중 오류 발생 (행: {current_row}): {e}")
-            continue  # 다음 행으로 넘어가기
-    current_row +=1
-    try:
-        ws['Z43'] = total_order_amount
-        ws['AD43'] = total_vat
-        ws['M44'] = total_order_amount + total_vat  # M43로 변경
-        ws['Z43'].number_format = '#,##0'
-        ws['AD43'].number_format = '#,##0'
-        ws['M44'].number_format = '#,##0'
-        logging.info(f"합계 - order_amount: {total_order_amount}, vat: {total_vat}, total: {total_order_amount + total_vat}이(가) Z43, AD43, M44 셀에 할당되었습니다.")
-    except Exception as e:
-        logging.error(f"합계 셀 할당 중 오류 발생: {e}")
-    logging.info(f"엑셀에 {len(data_rows)}개의 데이터가 삽입되었습니다.")
-
-def convert_excel_to_pdf(excel_path, output_folder):
-    try:
-        command = [
-            'libreoffice',
-            '--headless',
-            '--convert-to', 'pdf',
-            '--outdir', output_folder,
-            excel_path
-        ]
-        logging.info(f"LibreOffice를 사용하여 PDF로 변환 중: {excel_path}")
-        subprocess.run(command, check=True)
-        base_filename = os.path.splitext(os.path.basename(excel_path))[0]
-        pdf_filename = f"{base_filename}.pdf"
-        pdf_path = os.path.join(output_folder, pdf_filename)
-        if not os.path.exists(pdf_path):
-            raise FileNotFoundError(f"PDF 변환이 실패했습니다: {pdf_path}")
-        logging.info(f"PDF 파일이 성공적으로 생성되었습니다: {pdf_path}")
-        return pdf_path
-    except subprocess.CalledProcessError as e:
-        logging.error(f"LibreOffice 변환 오류: {e}")
-        raise e
-    except Exception as e:
-        logging.error(f"PDF 변환 중 오류 발생: {e}")
-        raise e
-
-def fetch_data(engine, target_date):
-    if engine is None:
-        logging.error("SQLAlchemy 엔진이 생성되지 않았습니다.")
-        return None
-    try:
-        query = f"""
-            SELECT 
-                a.order_date,
-                a.rep_code,
-                a.rep_name,
-                a.client_code,
-                a.client_name,
-                a.item_code,
-                a.item_name,
-                a.cond,
-                a.unit,
-                a.qty,
-                a.cal_qty,
-                a.unit_price,
-                a.order_amount,
-                a.vat,
-                a.total_amount,
-                a.tax,
-                c.full_name,       -- 매출처명
-                c.reg_no,          -- 매출처 등록번호
-                c.president,       -- 매출처 성명
-                c.address1         -- 매출처 주소
-            FROM {AR_ORDER_DETAILS_ITEM_TABLE} a
-            LEFT JOIN {CM_CHAIN_TABLE} c ON a.client_code COLLATE utf8mb4_unicode_ci = c.chain_no COLLATE utf8mb4_unicode_ci
-            WHERE a.order_date = '{target_date}'
-            ORDER BY a.client_code, a.order_date
-        """
-        df = pd.read_sql(query, engine)
-        logging.info(f"MySQL에서 데이터를 성공적으로 조회했습니다. 총 {len(df)}개의 레코드.")
-        return df
-    except Exception as e:
-        logging.error(f"데이터 조회 중 오류 발생: {e}")
-        return None
-
-def export_orders_to_files(order_date):
-    setup_export_logging()
-    engine = get_sqlalchemy_engine()
-    if engine is None:
-        logging.error("SQLAlchemy 엔진 생성에 실패하여 ETL 프로세스를 종료합니다.")
-        raise ConnectionError("SQLAlchemy 엔진 생성에 실패했습니다.")
-    df = fetch_data(engine, order_date)
-    if df is None or df.empty:
-        logging.error("데이터 조회에 실패하거나 데이터가 없습니다.")
-        raise ValueError("데이터 조회에 실패하거나 데이터가 없습니다.")
-    grouped = df.groupby(['client_code'])
-    logging.info(f"배송일자 {order_date}에 대한 데이터는 {len(grouped)}개의 거래처로 나뉩니다.")
-    if not os.path.exists(OUTPUT_FOLDER):
-        os.makedirs(OUTPUT_FOLDER)
-        logging.info(f"출력 폴더를 생성했습니다: {OUTPUT_FOLDER}")
-    file_paths = []  # 생성된 파일 경로를 저장할 리스트
-    for client_code, group in grouped:
-        client_name = group['client_name'].iloc[0]
-        logging.info(f"Processing client_code: {client_code}, client_name: {client_name}")
-        try:
-            df_processed = group.copy()
-            df_processed = preprocess_data(group)
-        except Exception as e:
-            logging.error(f"데이터 전처리 중 오류 발생 (client_code: {client_code}): {e}")
-            continue  # 다음 그룹으로 넘어가기
-        if pd.isna(client_name) or client_name.strip() == "":
-            logging.error(f"클라이언트 이름이 누락되었습니다 (client_code: {client_code}). PDF 및 엑셀 생성을 건너뜁니다.")
-            continue  # 클라이언트 이름이 없으면 건너뜀
-        try:
-            wb, ws = load_excel_template()
-        except Exception as e:
-            logging.error(f"엑셀 템플릿 로드 중 오류 발생: {e}")
-            continue  # 다음 그룹으로 넘어가기
-        try:
-            excel_path = generate_excel_file(wb, ws, client_name, order_date, df_processed)
-            file_paths.append(excel_path)
-            logging.info(f"{order_date} 엑셀 파일 생성 완료: {excel_path}")
-            try:
-                pdf_path = convert_excel_to_pdf(excel_path, OUTPUT_FOLDER)
-                file_paths.append(pdf_path)
-                logging.info(f"{order_date} PDF 파일 생성 완료: {pdf_path}")
-            except Exception as e:
-                logging.error(f"PDF 변환 오류 (client_code: {client_code}, order_date: {order_date}): {e}")
-        except Exception as e:
-            logging.error(f"엑셀 파일 생성 오류 (client_code: {client_code}, order_date: {order_date}): {e}")
-    logging.info("모든 파일 생성 완료.")
-    return file_paths
-
-def setup_export_logging():
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler("export_orders.log"),
-            logging.StreamHandler()
-        ]
-    )
-    logging.info("내보내기 프로세스 시작.")
-
-def get_sqlalchemy_engine():
-    try:
-        engine = create_engine(
-            f"mysql+pymysql://{os.getenv('DB_USER', 'nolboo')}:{os.getenv('DB_PASSWORD', '2024!puser')}@"
-            f"{os.getenv('DB_HOST', '175.196.7.45')}/{os.getenv('DB_NAME', 'nolboo')}?charset=utf8mb4"
-        )
-        logging.info("SQLAlchemy 엔진이 성공적으로 생성되었습니다.")
-        return engine
-    except Exception as e:
-        logging.error(f"SQLAlchemy 엔진 생성 오류: {e}")
-        return None
-
-def preprocess_data(df):
-    required_columns = list(COLUMN_MAPPING.values()) + ['full_name', 'reg_no', 'president', 'address1']  # 추가 컬럼
-    missing_columns = [col for col in required_columns if col not in df.columns]
-    if missing_columns:
-        logging.error(f"MySQL 데이터에 누락된 컬럼이 있습니다: {missing_columns}")
-        raise ValueError(f"MySQL 데이터에 누락된 컬럼이 있습니다: {missing_columns}")
-    df = df[required_columns]
-    df['order_date'] = pd.to_datetime(df['order_date'], errors='coerce').dt.strftime('%Y-%m-%d')
-    decimal_columns = ['qty', 'cal_qty', 'unit_price', 'order_amount', 'vat', 'total_amount']
-    for col in decimal_columns:
-        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).round(2)
-    string_fields = ['rep_code', 'rep_name', 'client_code', 'client_name', 'item_code', 'item_name', 'cond', 'unit', 'tax']
-    for field in string_fields:
-        df[field] = df[field].astype(str).str.strip()
-    df['full_name'] = df['full_name'].fillna('-').astype(str).str.strip()
-    df['reg_no'] = df['reg_no'].fillna('-').astype(str).str.strip()
-    df['president'] = df['president'].fillna('-').astype(str).str.strip()
-    df['address1'] = df['address1'].fillna('-').astype(str).str.strip()
-    logging.info("데이터 전처리 및 형변환이 완료되었습니다.")
-    return df
-
-# ------------------------
-# 백그라운드 작업 관련 함수 및 전역 변수
-# ------------------------
-background_tasks = {}  # task_id -> {'status': 'pending'|'complete'|'failed', 'result': 파일 경로 목록 or error message}
-
-def background_export_client_orders(from_date, to_date, client_code, task_id):
-    try:
-        logging.info(f"백그라운드 작업 시작: task_id={task_id}")
-        file_paths = export_client_orders_to_files(from_date, to_date, client_code)
-        background_tasks[task_id] = {'status': 'complete', 'result': file_paths}
-        logging.info(f"백그라운드 작업 완료: task_id={task_id}")
-    except Exception as e:
-        logging.error(f"백그라운드 작업 오류 (task_id={task_id}): {e}", exc_info=True)
-        background_tasks[task_id] = {'status': 'failed', 'result': str(e)}
-
-# ---------------------------
-# 신규 라우트: 매출처/일자 범위 거래명세표 다운로드 폼 (드롭다운 + 검색 기능)
-# ---------------------------
-@app.route('/download_client_orders_form', methods=['GET'])
-def download_client_orders_form():
-    form = DownloadClientOrdersForm()
-    db = get_db_connection()
-    if db:
-        try:
-            with db.cursor(dictionary=True) as cursor:
-                cursor.execute("""
-                    SELECT DISTINCT c.chain_no, c.full_name 
-                    FROM cm_chain c
-                    INNER JOIN AROrderDetailsItem a ON a.client_code = c.chain_no
-                    ORDER BY c.full_name
-                """)
-                clients = cursor.fetchall()
-                form.client_code.choices = [('', '전체매출처')] + [
-                    (client['chain_no'], f"{client['chain_no']} - {client['full_name']}")
-                    for client in clients
-                ]
-        except Exception as e:
-            logging.error(f"cm_chain 조회 오류: {e}", exc_info=True)
-            form.client_code.choices = [('', '전체매출처')]
-        finally:
-            db.close()
-    else:
-        form.client_code.choices = [('', '전체매출처')]
-    return render_template('download_client_orders_form.html', form=form)
-
-# ------------------------
-# 라우트: 매출처/일자 범위 거래명세표 생성 요청 (백그라운드 처리)
-# ------------------------
-@app.route('/download_client_orders', methods=['POST'])
-def download_client_orders():
-    form = DownloadClientOrdersForm()
-    # POST 요청 시에도 client_code 선택지를 재설정합니다.
-    db = get_db_connection()
-    if db:
-        try:
-            with db.cursor(dictionary=True) as cursor:
-                cursor.execute("SELECT chain_no, full_name FROM cm_chain ORDER BY full_name")
-                clients = cursor.fetchall()
-                form.client_code.choices = [('', '전체매출처')] + [
-                    (client['chain_no'], f"{client['chain_no']} - {client['full_name']}")
-                    for client in clients
-                ]
-            logging.info(f"POST: client_code 선택지 재설정 완료. Choices: {form.client_code.choices}")
-        except Exception as e:
-            logging.error(f"cm_chain 조회 오류 (POST): {e}", exc_info=True)
-            form.client_code.choices = [('', '전체매출처')]
-        finally:
-            db.close()
-    else:
-        form.client_code.choices = [('', '전체매출처')]
-
-    if form.validate_on_submit():
-        client_code = form.client_code.data.strip() if form.client_code.data else ""
-        from_date = form.from_date.data.strftime('%Y-%m-%d')
-        to_date = form.to_date.data.strftime('%Y-%m-%d')
-        logging.info(f"매출처 거래명세표 생성 요청 - client_code: '{client_code}', 기간: {from_date} ~ {to_date}")
-        try:
-            # 고유 task_id 생성
-            task_id = str(uuid.uuid4())
-            background_tasks[task_id] = {'status': 'pending', 'result': None}
-            thread = threading.Thread(target=background_export_client_orders, args=(from_date, to_date, client_code, task_id))
-            thread.start()
-            flash("파일 생성 작업이 백그라운드에서 시작되었습니다. 작업 완료 후 다운로드 페이지에서 확인하세요.", "info")
-            return redirect(url_for('download_client_orders_status', task_id=task_id))
-        except Exception as e:
-            logging.error(f"매출처 거래명세표 생성 오류: {e}", exc_info=True)
-            flash(f"매출처 거래명세표 생성 중 오류가 발생했습니다: {e}", 'danger')
-            return redirect(url_for('download_client_orders_form'))
-    else:
-        logging.error(f"DownloadClientOrdersForm: 폼 검증 실패 - {form.errors}")
-        for field, errors in form.errors.items():
-            for error in errors:
-                flash(f"{getattr(form, field).label.text} - {error}", 'danger')
-        return redirect(url_for('download_client_orders_form'))
-
-# ------------------------
-# 라우트: 백그라운드 작업 상태 및 다운로드 페이지
-# ------------------------
-@app.route('/download_client_orders_status', methods=['GET'])
-def download_client_orders_status():
-    task_id = request.args.get('task_id', None)
-    if not task_id:
-        flash("작업 ID가 제공되지 않았습니다.", "danger")
-        return redirect(url_for('download_client_orders_form'))
-    task = background_tasks.get(task_id)
-    if not task:
-        flash("유효하지 않은 작업 ID입니다.", "danger")
-        return redirect(url_for('download_client_orders_form'))
-    if task['status'] == 'pending':
-        return render_template('download_client_orders_status.html', status="진행중", task_id=task_id)
-    elif task['status'] == 'failed':
-        flash(f"작업 실패: {task['result']}", "danger")
-        return redirect(url_for('download_client_orders_form'))
-    elif task['status'] == 'complete':
-        # 생성된 파일들 중 첫 번째 ZIP 파일을 다운로드하도록 처리
-        file_paths = task['result']
-        if file_paths:
-            # ZIP 파일 생성: 여러 파일이 있을 경우, ZIP으로 압축하여 하나의 파일로 만듭니다.
-            with tempfile.TemporaryDirectory() as tmpdirname:
-                zip_filename = f"거래명세표_{task_id}.zip"
-                zip_path = os.path.join(tmpdirname, zip_filename)
-                with ZipFile(zip_path, 'w') as zipf:
-                    for file_path in file_paths:
-                        zipf.write(file_path, os.path.basename(file_path))
-                return send_from_directory(
-                    directory=tmpdirname,
-                    path=zip_filename,
-                    as_attachment=True,
-                    download_name=zip_filename
-                )
-        else:
-            flash("생성된 파일이 없습니다.", "danger")
-            return redirect(url_for('download_client_orders_form'))
-    else:
-        flash("알 수 없는 작업 상태입니다.", "danger")
-        return redirect(url_for('download_client_orders_form'))
 
 def etl_process():
     # excel_path_step3 = None  # 초기화
@@ -1817,6 +1368,75 @@ def download_orders_excel():
 # 10. 기타 헬퍼 함수 및 로깅 설정
 # ------------------------
 
+def setup_export_logging():
+    """
+    엑셀/PDF 내보내기 전용 로깅 설정 함수.
+    """
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler("export_orders.log"),
+            logging.StreamHandler()
+        ]
+    )
+    logging.info("내보내기 프로세스 시작.")
+
+def get_sqlalchemy_engine():
+    """
+    SQLAlchemy 엔진을 생성하는 함수.
+    기존 MySQL 연결 정보를 활용합니다.
+    """
+    try:
+        engine = create_engine(
+            f"mysql+pymysql://{os.getenv('DB_USER', 'nolboo')}:{os.getenv('DB_PASSWORD', '2024!puser')}@"
+            f"{os.getenv('DB_HOST', '175.196.7.45')}/{os.getenv('DB_NAME', 'nolboo')}?charset=utf8mb4"
+        )
+        logging.info("SQLAlchemy 엔진이 성공적으로 생성되었습니다.")
+        return engine
+    except Exception as e:
+        logging.error(f"SQLAlchemy 엔진 생성 오류: {e}")
+        return None
+
+def preprocess_data(df):
+    """
+    MySQL에서 조회한 데이터 전처리 함수.
+    필요한 컬럼만 선택하고 데이터 타입 변환.
+    """
+    # 필요한 컬럼 확인
+    required_columns = list(COLUMN_MAPPING.values()) + ['full_name', 'reg_no', 'president', 'address1']  # 추가 컬럼
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    if missing_columns:
+        logging.error(f"MySQL 데이터에 누락된 컬럼이 있습니다: {missing_columns}")
+        raise ValueError(f"MySQL 데이터에 누락된 컬럼이 있습니다: {missing_columns}")
+    
+    # 필요한 컬럼만 선택
+    df = df[required_columns]
+    
+    # 데이터 타입 변환
+    # order_date: 문자열 (날짜 형식)
+    df['order_date'] = pd.to_datetime(df['order_date'], errors='coerce').dt.strftime('%Y-%m-%d')
+    
+    # 수량 관련 컬럼: Decimal(15,2)
+    decimal_columns = ['qty', 'cal_qty', 'unit_price', 'order_amount', 'vat', 'total_amount']
+    for col in decimal_columns:
+        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).round(2)
+    
+    # 기타 문자열 필드: strip() 적용
+    string_fields = ['rep_code', 'rep_name', 'client_code', 'client_name', 
+                        'item_code', 'item_name', 'cond', 'unit', 'tax']
+    for field in string_fields:
+        df[field] = df[field].astype(str).str.strip()
+    
+    # 공급받는자 정보 (매출처 정보)
+    df['full_name'] = df['full_name'].fillna('-').astype(str).str.strip()
+    df['reg_no'] = df['reg_no'].fillna('-').astype(str).str.strip()
+    df['president'] = df['president'].fillna('-').astype(str).str.strip()
+    df['address1'] = df['address1'].fillna('-').astype(str).str.strip()
+    
+    logging.info("데이터 전처리 및 형변환이 완료되었습니다.")
+    
+    return df
 
 def load_excel_template():
     """
@@ -1853,9 +1473,517 @@ def insert_cell_value(ws, row, column, value):
         # 병합되지 않은 셀인 경우, 직접 값 할당
         cell.value = value
 
+def insert_data_to_excel(wb, ws, supplier_info, client_info, order_date, data_rows):
+    """
+    엑셀 템플릿에 데이터를 삽입하는 함수.
+    """
+    # 공급자 정보 삽입 (고정된 위치)
+    ws['G3'] = supplier_info['등록번호']
+    ws['G4'] = supplier_info['상호 (법인명)']
+    ws['G5'] = supplier_info['성명']
+    ws['G6'] = supplier_info['주소']
+    
+    # 공급받는자 정보 삽입 (동적 위치)
+    # 사업자 등록번호를 10개의 셀에 한 글자씩 할당
+    reg_no = client_info.get('reg_no', '-').replace('-', '')  # 하이픈 제거
+    reg_no = reg_no.ljust(10, '-')[:10]  # 10자리 맞추기
+    
+    reg_no_cells = ['V3', 'W3', 'X3', 'Z3', 'AA3', 'AC3', 'AD3', 'AE3', 'AF3', 'AG3']
+    
+    for cell, char in zip(reg_no_cells, reg_no):
+        # 셀 문자열에서 열 문자와 행 번호 분리
+        column_letters = ''.join(filter(str.isalpha, cell))
+        row_num = int(''.join(filter(str.isdigit, cell)))
+        column_num = column_index_from_string(column_letters)
+        insert_cell_value(ws, row_num, column_num, char)
+    
+    # 다른 공급받는자 정보 할당
+    ws['V4'] = f"{client_info.get('full_name', '-')}"
+    ws['V5'] = f"{client_info.get('president', '-')}"
+    ws['V6'] = f"{client_info.get('address1', '-')}"
+    
+    # rep_name을 U2에 할당
+    if data_rows:
+        rep_name = data_rows[0].get('rep_name', '-')
+        ws['U2'] = rep_name
+    else:
+        ws['U2'] = '-'
+    
+    # 거래일자 삽입
+    ws['A2'] = f"{order_date}"
+    
+    # 데이터 삽입 시작 행 (예: 8행부터)
+    current_row = 8
+    
+    # 합계 계산을 위한 변수 초기화
+    total_order_amount = 0.0
+    total_vat = 0.0
+    
+    for row in data_rows:
+        try:
+            # 품명 (컬럼 1)
+            insert_cell_value(ws, current_row, 1, row['item_name'])
+            # 단위 (컬럼 14)
+            insert_cell_value(ws, current_row, 14, row['unit'])
+            # 수량 (컬럼 17)
+            insert_cell_value(ws, current_row, 17, float(row['qty']))
+            # 단가 (컬럼 21)
+            insert_cell_value(ws, current_row, 21, float(row['unit_price']))
+            # 금액 (컬럼 26)
+            insert_cell_value(ws, current_row, 26, float(row['order_amount']))
+            # 세액 (컬럼 30)
+            insert_cell_value(ws, current_row, 30, float(row['vat']))
+            
+            # 합계 누적
+            total_order_amount += float(row['order_amount'])
+            total_vat += float(row['vat'])
+            
+            current_row +=1
+        except Exception as e:
+            logging.error(f"데이터 삽입 중 오류 발생 (행: {current_row}): {e}")
+            continue  # 다음 행으로 넘어가기
+    
+    # 공백 행 추가
+    current_row +=1
+    
+    # 합계 값을 특정 셀에 할당
+    try:
+        ws['Z43'] = total_order_amount
+        ws['AD43'] = total_vat
+        ws['M44'] = total_order_amount + total_vat  # M43로 변경
+        
+        # 합계 셀에 숫자 형식 적용 (콤마 구분 및 소수점 2자리)
+        ws['Z43'].number_format = '#,##0'
+        ws['AD43'].number_format = '#,##0'
+        ws['M44'].number_format = '#,##0'
+        
+        logging.info(f"합계 - order_amount: {total_order_amount}, vat: {total_vat}, total: {total_order_amount + total_vat}이(가) Z43, AD43, M44 셀에 할당되었습니다.")
+    except Exception as e:
+        logging.error(f"합계 셀 할당 중 오류 발생: {e}")
+    
+    logging.info(f"엑셀에 {len(data_rows)}개의 데이터가 삽입되었습니다.")
+
+def generate_excel_file(wb, ws, client_name, order_date, group):
+    """
+    단일 거래처와 일자에 대한 엑셀 파일을 생성하고 저장합니다.
+    """
+    try:
+        # 공급받는자 정보 가져오기
+        client_info = {
+            'full_name': group['full_name'].iloc[0],
+            'reg_no': group['reg_no'].iloc[0],
+            'president': group['president'].iloc[0],
+            'address1': group['address1'].iloc[0]
+        }
+        
+        # 데이터 삽입
+        insert_data_to_excel(wb, ws, SUPPLIER_INFO, client_info, order_date, group.to_dict('records'))
+        
+        # 파일명 생성: 거래명세표_고객명_배송일자.xlsx
+        sanitized_client_name = re.sub(r'[\\/*?:"<>|]', "_", client_name)  # 파일명에 사용할 수 없는 문자를 _로 대체
+        sanitized_order_date = order_date.replace('-', '')
+        
+        if sanitized_client_name == "":
+            sanitized_client_name = "unknown"
+        
+        output_filename = f"거래명세표_{sanitized_client_name}_{sanitized_order_date}.xlsx"
+        output_path = os.path.join(OUTPUT_FOLDER, output_filename)
+        
+        # 엑셀 파일 저장
+        wb.save(output_path)
+        logging.info(f"엑셀 파일이 성공적으로 저장되었습니다: {output_path}")
+        return output_path
+    except Exception as e:
+        logging.error(f"엑셀 파일 생성 중 오류 발생 (고객명: {client_name}, 배송일자: {order_date}): {e}")
+        raise e
+
+def convert_excel_to_pdf(excel_path, output_folder):
+    """
+    LibreOffice를 사용하여 엑셀 파일을 PDF로 변환합니다.
+    
+    :param excel_path: 변환할 엑셀 파일의 경로
+    :param output_folder: PDF 파일을 저장할 디렉토리
+    :return: 변환된 PDF 파일의 경로
+    """
+    try:
+        # LibreOffice 명령어 구성
+        command = [
+            'libreoffice',
+            '--headless',
+            '--convert-to', 'pdf',
+            '--outdir', output_folder,
+            excel_path
+        ]
+        logging.info(f"LibreOffice를 사용하여 PDF로 변환 중: {excel_path}")
+        subprocess.run(command, check=True)
+        
+        # 변환된 PDF 파일 경로 추정
+        base_filename = os.path.splitext(os.path.basename(excel_path))[0]
+        pdf_filename = f"{base_filename}.pdf"
+        pdf_path = os.path.join(output_folder, pdf_filename)
+        
+        if not os.path.exists(pdf_path):
+            raise FileNotFoundError(f"PDF 변환이 실패했습니다: {pdf_path}")
+        
+        logging.info(f"PDF 파일이 성공적으로 생성되었습니다: {pdf_path}")
+        return pdf_path
+    except subprocess.CalledProcessError as e:
+        logging.error(f"LibreOffice 변환 오류: {e}")
+        raise e
+    except Exception as e:
+        logging.error(f"PDF 변환 중 오류 발생: {e}")
+        raise e
+
+def fetch_data(engine, target_date):
+    """
+    SQLAlchemy 엔진을 사용하여 데이터베이스에서 특정 날짜의 데이터를 조회합니다.
+    
+    :param engine: SQLAlchemy 엔진 객체
+    :param target_date: 처리할 배송일자 (YYYY-MM-DD)
+    :return: Pandas DataFrame
+    """
+    if engine is None:
+        logging.error("SQLAlchemy 엔진이 생성되지 않았습니다.")
+        return None
+    
+    try:
+        query = f"""
+            SELECT 
+                a.order_date,
+                a.rep_code,
+                a.rep_name,
+                a.client_code,
+                a.client_name,
+                a.item_code,
+                a.item_name,
+                a.cond,
+                a.unit,
+                a.qty,
+                a.cal_qty,
+                a.unit_price,
+                a.order_amount,
+                a.vat,
+                a.total_amount,
+                a.tax,
+                c.full_name,       -- 매출처명
+                c.reg_no,          -- 매출처 등록번호
+                c.president,       -- 매출처 성명
+                c.address1         -- 매출처 주소
+            FROM 
+                {AR_ORDER_DETAILS_ITEM_TABLE} a
+            LEFT JOIN 
+                {CM_CHAIN_TABLE} c ON a.client_code COLLATE utf8mb4_unicode_ci = c.chain_no COLLATE utf8mb4_unicode_ci
+            WHERE
+                a.order_date = '{target_date}'
+            ORDER BY 
+                a.client_code, a.order_date
+        """
+        df = pd.read_sql(query, engine)
+        logging.info(f"MySQL에서 데이터를 성공적으로 조회했습니다. 총 {len(df)}개의 레코드.")
+        return df
+    except Exception as e:
+        logging.error(f"데이터 조회 중 오류 발생: {e}")
+        return None
+
+def export_orders_to_files(order_date):
+    """
+    특정 배송일자에 대한 거래명세표 엑셀 및 PDF 파일을 생성하고 저장합니다.
+    
+    :param order_date: 처리할 배송일자 (YYYY-MM-DD)
+    :return: 생성된 파일들의 경로 리스트
+    """
+    setup_export_logging()
+    
+    # SQLAlchemy 엔진 생성
+    engine = get_sqlalchemy_engine()
+    if engine is None:
+        logging.error("SQLAlchemy 엔진 생성에 실패하여 ETL 프로세스를 종료합니다.")
+        raise ConnectionError("SQLAlchemy 엔진 생성에 실패했습니다.")
+    
+    # 데이터베이스에서 데이터 조회
+    df = fetch_data(engine, order_date)
+    if df is None or df.empty:
+        logging.error("데이터 조회에 실패하거나 데이터가 없습니다.")
+        raise ValueError("데이터 조회에 실패하거나 데이터가 없습니다.")
+    
+    # 그룹화: client_code
+    grouped = df.groupby(['client_code'])
+    logging.info(f"배송일자 {order_date}에 대한 데이터는 {len(grouped)}개의 거래처로 나뉩니다.")
+    
+    # 출력 폴더가 존재하지 않으면 생성
+    if not os.path.exists(OUTPUT_FOLDER):
+        os.makedirs(OUTPUT_FOLDER)
+        logging.info(f"출력 폴더를 생성했습니다: {OUTPUT_FOLDER}")
+    
+    file_paths = []  # 생성된 파일 경로를 저장할 리스트
+    
+    for client_code, group in grouped:
+        client_name = group['client_name'].iloc[0]
+        logging.info(f"Processing client_code: {client_code}, client_name: {client_name}")
+        
+        # 데이터 전처리
+        try:
+            df_processed = preprocess_data(group)
+        except Exception as e:
+            logging.error(f"데이터 전처리 중 오류 발생 (client_code: {client_code}): {e}")
+            continue  # 다음 그룹으로 넘어가기
+        
+        # 클라이언트 정보 검증
+        if pd.isna(client_name) or client_name.strip() == "":
+            logging.error(f"클라이언트 이름이 누락되었습니다 (client_code: {client_code}). PDF 및 엑셀 생성을 건너뜁니다.")
+            continue  # 클라이언트 이름이 없으면 건너뜀
+        
+        # 엑셀 템플릿 로드
+        try:
+            wb, ws = load_excel_template()
+        except Exception as e:
+            logging.error(f"엑셀 템플릿 로드 중 오류 발생: {e}")
+            continue  # 다음 그룹으로 넘어가기
+        
+        # 엑셀 파일 생성 및 데이터 삽입
+        try:
+            excel_path = generate_excel_file(wb, ws, client_name, order_date, df_processed)
+            file_paths.append(excel_path)
+        except Exception as e:
+            logging.error(f"엑셀 파일 생성 중 오류 발생 (client_code: {client_code}, order_date: {order_date}): {e}")
+            continue  # 다음 그룹으로 넘어가기
+        
+        # 공급받는자 정보 가져오기
+        client_info = {
+            'full_name': group['full_name'].iloc[0],
+            'reg_no': group['reg_no'].iloc[0],
+            'president': group['president'].iloc[0],
+            'address1': group['address1'].iloc[0]
+        }
+        
+        # PDF 파일 생성 (엑셀을 PDF로 변환)
+        try:
+            pdf_path = convert_excel_to_pdf(excel_path, OUTPUT_FOLDER)
+            file_paths.append(pdf_path)
+        except Exception as e:
+            logging.error(f"PDF 파일 생성 중 오류 발생 (client_code: {client_code}, order_date: {order_date}): {e}")
+            continue  # 다음 그룹으로 넘어가기
+    
+    logging.info("모든 파일이 성공적으로 생성되었습니다.")
+    return file_paths
+
+# ------------------------
+# 9. 기타 라우트 및 기능 (기존 코드 유지)
+# ------------------------
+
+# 이미 다른 라우트들이 정의되어 있으므로 추가로 수정할 필요 없음
+
+# app.py 파일의 맨 아래에 추가
+
+# 공급자 정보는 이미 코드 상단에 정의되어 있으므로 중복 정의 제거
+
+
+# ---------------------------
+# 새 폼 클래스: 매출처 및 일자 범위 입력 폼
+# ---------------------------
+class DownloadClientOrdersForm(FlaskForm):
+    client_code = SelectField('매출처', choices=[], validators=[DataRequired()])
+    from_date = DateField('시작일', format='%Y-%m-%d', validators=[DataRequired()])
+    to_date = DateField('종료일', format='%Y-%m-%d', validators=[DataRequired()])
+    submit = SubmitField('거래명세표 생성')
+
 # 헬퍼 함수: 파일 확장자 확인 (기존)
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+# 기타 헬퍼 함수 (extract_data, save_to_excel, log_query_string, convert_to_utf8 등)은 기존 그대로 사용
+
+# ---------------------------
+# 신규 기능: 매출처 및 일자 범위 거래명세표 생성 ETL 함수
+# ---------------------------
+def fetch_client_data(engine, from_date, to_date, client_code):
+    try:
+        query = f"""
+            SELECT 
+                a.order_date,
+                a.rep_code,
+                a.rep_name,
+                a.client_code,
+                a.client_name,
+                a.item_code,
+                a.item_name,
+                a.cond,
+                a.unit,
+                a.qty,
+                a.cal_qty,
+                a.unit_price,
+                a.order_amount,
+                a.vat,
+                a.total_amount,
+                a.tax,
+                c.full_name,       -- 매출처명 (cm_chain의 full_name)
+                c.reg_no,          -- 매출처 등록번호
+                c.president,       -- 매출처 대표자
+                c.address1         -- 매출처 주소
+            FROM {AR_ORDER_DETAILS_ITEM_TABLE} a
+            INNER JOIN {CM_CHAIN_TABLE} c 
+              ON a.client_code COLLATE utf8mb4_unicode_ci = c.chain_no COLLATE utf8mb4_unicode_ci
+            WHERE a.order_date BETWEEN '{from_date}' AND '{to_date}'
+        """
+        # client_code 값의 좌우 공백 제거 후 조건 추가
+        if client_code and client_code.strip() != "":
+            query += f" AND a.client_code = '{client_code.strip()}'"
+        query += " ORDER BY a.order_date, a.client_code"
+        logging.debug(f"fetch_client_data 쿼리: {query}")
+        df = pd.read_sql(query, engine)
+        logging.info(f"MySQL에서 데이터를 성공적으로 조회했습니다. 총 {len(df)}개의 레코드.")
+        return df
+    except Exception as e:
+        logging.error(f"매출처 데이터 조회 중 오류 발생: {e}", exc_info=True)
+        return None
+
+def export_client_orders_to_files(from_date, to_date, client_code):
+    logging.debug("export_client_orders_to_files 함수 시작 (일자별 출력)")
+    logging.info(f"매개변수: from_date={from_date}, to_date={to_date}, client_code='{client_code}'")
+    
+    engine = get_sqlalchemy_engine()
+    if engine is None:
+        logging.error("SQLAlchemy 엔진 생성 실패")
+        raise ConnectionError("SQLAlchemy 엔진 생성 실패")
+    
+    df = fetch_client_data(engine, from_date, to_date, client_code)
+    logging.info(f"fetch_client_data 완료: {len(df)} 행 조회됨")
+    if df.empty:
+        logging.error("조회된 데이터가 없습니다.")
+        raise ValueError("조회된 데이터가 없습니다.")
+    
+    try:
+        df['order_date'] = pd.to_datetime(df['order_date'], errors='coerce').dt.strftime('%Y-%m-%d')
+        logging.debug("데이터 전처리 완료")
+    except Exception as e:
+        logging.error(f"데이터 전처리 오류: {e}", exc_info=True)
+        raise e
+
+    file_paths = []
+    # 만약 client_code가 공백이면, 전체 매출처에 대해 처리하므로 날짜와 client_code별로 그룹화합니다.
+    # 특정 매출처가 선택되었으면 이미 client_code 조건이 적용되었으므로 날짜별로만 그룹화합니다.
+    if client_code.strip() == "":
+        grouped = df.groupby(['order_date', 'client_code'])
+    else:
+        grouped = df.groupby(['order_date'])
+    
+    for group_keys, group in grouped:
+        # group_keys가 튜플이면 (order_date, client_code), 아니면 단일 order_date
+        if isinstance(group_keys, tuple):
+            day_str, client_grp = group_keys
+        else:
+            day_str = group_keys
+        logging.info(f"처리 그룹: {group_keys}")
+        try:
+            # 매일 템플릿을 새로 로드합니다.
+            wb = load_workbook(TEMPLATE_FILE)
+            ws = wb.active
+            # 그룹 내 첫 번째 행의 client_name을 사용합니다.
+            client_name = group['client_name'].iloc[0] if 'client_name' in group.columns else "unknown"
+            excel_path = generate_excel_file(wb, ws, client_name, day_str, group)
+            file_paths.append(excel_path)
+            logging.info(f"{day_str} 엑셀 파일 생성 완료: {excel_path}")
+            try:
+                pdf_path = convert_excel_to_pdf(excel_path, OUTPUT_FOLDER)
+                file_paths.append(pdf_path)
+                logging.info(f"{day_str} PDF 파일 생성 완료: {pdf_path}")
+            except Exception as e:
+                logging.error(f"PDF 변환 오류 ({day_str}): {e}", exc_info=True)
+        except Exception as e:
+            logging.error(f"엑셀 파일 생성 오류 ({group_keys}): {e}", exc_info=True)
+    
+    logging.debug("export_client_orders_to_files 함수 종료 (일자별 출력)")
+    return file_paths
+
+# ---------------------------
+# 신규 라우트: 매출처/일자 범위 거래명세표 다운로드 폼 (드롭다운 + 검색 기능)
+# ---------------------------
+@app.route('/download_client_orders_form', methods=['GET'])
+def download_client_orders_form():
+    form = DownloadClientOrdersForm()
+    db = get_db_connection()
+    if db:
+        try:
+            with db.cursor(dictionary=True) as cursor:
+                # AROrderDetailsItem와 INNER JOIN하여 실제 거래내역이 있는 매출처만 조회
+                cursor.execute("""
+                    SELECT DISTINCT c.chain_no, c.full_name 
+                    FROM cm_chain c
+                    INNER JOIN AROrderDetailsItem a ON a.client_code = c.chain_no
+                    ORDER BY c.full_name
+                """)
+                clients = cursor.fetchall()
+                # 기본 선택 옵션 ('전체매출처')를 추가하고, 조회된 선택지를 "코드 - 이름" 형식으로 구성
+                form.client_code.choices = [('', '전체매출처')] + [
+                    (client['chain_no'], f"{client['chain_no']} - {client['full_name']}")
+                    for client in clients
+                ]
+        except Exception as e:
+            logging.error(f"cm_chain 조회 오류: {e}", exc_info=True)
+            form.client_code.choices = [('', '전체매출처')]
+        finally:
+            db.close()
+    else:
+        form.client_code.choices = [('', '전체매출처')]
+    return render_template('download_client_orders_form.html', form=form)
+
+
+@app.route('/download_client_orders', methods=['POST'])
+def download_client_orders():
+    form = DownloadClientOrdersForm()
+    # POST 요청 시에도 client_code 선택지를 재설정합니다.
+    db = get_db_connection()
+    if db:
+        try:
+            with db.cursor(dictionary=True) as cursor:
+                cursor.execute("SELECT chain_no, full_name FROM cm_chain ORDER BY full_name")
+                clients = cursor.fetchall()
+                form.client_code.choices = [('', '전체매출처')] + [
+                    (client['chain_no'], f"{client['chain_no']} - {client['full_name']}")
+                    for client in clients
+                ]
+            logging.info(f"POST: client_code 선택지 재설정 완료. Choices: {form.client_code.choices}")
+        except Exception as e:
+            logging.error(f"cm_chain 조회 오류 (POST): {e}", exc_info=True)
+            form.client_code.choices = [('', '전체매출처')]
+        finally:
+            db.close()
+    else:
+        form.client_code.choices = [('', '전체매출처')]
+
+    if form.validate_on_submit():
+        client_code = form.client_code.data.strip() if form.client_code.data else ""
+        from_date = form.from_date.data.strftime('%Y-%m-%d')
+        to_date = form.to_date.data.strftime('%Y-%m-%d')
+        logging.info(f"매출처 거래명세표 생성 요청 - client_code: '{client_code}', 기간: {from_date} ~ {to_date}")
+        try:
+            file_paths = export_client_orders_to_files(from_date, to_date, client_code)
+            if not file_paths:
+                flash("파일이 생성되지 않았습니다.", "danger")
+                return redirect(url_for('download_client_orders_form'))
+            
+            with tempfile.TemporaryDirectory() as tmpdirname:
+                zip_filename = f"거래명세표_{client_code if client_code else '전체'}_{from_date.replace('-', '')}_{to_date.replace('-', '')}.zip"
+                zip_path = os.path.join(tmpdirname, zip_filename)
+                with ZipFile(zip_path, 'w') as zipf:
+                    for file_path in file_paths:
+                        zipf.write(file_path, os.path.basename(file_path))
+                return send_from_directory(
+                    directory=tmpdirname,
+                    path=zip_filename,
+                    as_attachment=True,
+                    download_name=zip_filename
+                )
+        except Exception as e:
+            logging.error(f"매출처 거래명세표 생성 중 오류 발생: {e}", exc_info=True)
+            flash(f"매출처 거래명세표 생성 중 오류가 발생했습니다: {e}", 'danger')
+            return redirect(url_for('download_client_orders_form'))
+    else:
+        logging.error(f"DownloadClientOrdersForm: 폼 검증 실패 - {form.errors}")
+        for field, errors in form.errors.items():
+            for error in errors:
+                flash(f"{getattr(form, field).label.text} - {error}", 'danger')
+        return redirect(url_for('download_client_orders_form'))
 
 # ---------------------------
 # 신규 폼 클래스: DownloadClientOrdersForm
@@ -1866,6 +1994,7 @@ class DownloadClientOrdersForm(FlaskForm):
     from_date = DateField('시작일', format='%Y-%m-%d', validators=[DataRequired()])
     to_date = DateField('종료일', format='%Y-%m-%d', validators=[DataRequired()])
     submit = SubmitField('거래명세표 생성')
+
 
 # ------------------------
 # 10. 애플리케이션 실행

@@ -1,0 +1,28 @@
+<!-- templates/download_client_orders_status.html -->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>거래명세표 생성 상태</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css">
+    <style>
+        body { padding-top: 70px; }
+    </style>
+</head>
+<body>
+    <div class="container mt-4">
+        <h1>거래명세표 생성 상태</h1>
+        <p>작업 ID: {{ task_id }}</p>
+        <p>상태: {{ status }}</p>
+        {% if status == "pending" %}
+            <p>작업이 진행 중입니다. 잠시 후 다시 확인해 주세요.</p>
+        {% elif status == "complete" %}
+            <p>작업이 완료되었습니다. 아래 버튼을 눌러 생성된 파일을 다운로드하세요.</p>
+            <a href="{{ url_for('download_generated_file', task_id=task_id) }}" class="btn btn-success">파일 다운로드</a>
+        {% elif status == "failed" %}
+            <p>작업이 실패했습니다: {{ error }}</p>
+        {% endif %}
+        <a href="{{ url_for('download_client_orders_form') }}" class="btn btn-primary mt-3">돌아가기</a>
+    </div>
+</body>
+</html>

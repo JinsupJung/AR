@@ -1,0 +1,78 @@
+<!-- templates/download_client_orders_form.html -->
+
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>매출처별 거래명세표 출력</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css">
+    <!-- Select2 CSS (드롭다운 검색 기능용) -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/css/select2.min.css" rel="stylesheet" />
+    <style>
+        body {
+            padding-top: 70px;
+        }
+        .select2-container {
+            width: 100% !important;
+        }
+    </style>
+</head>
+<body>
+    <!-- 네비게이션 바 (필요시 추가) -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark fixed-top">
+        <a class="navbar-brand" href="{{ url_for('index') }}">AR 관리 시스템</a>
+        <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav" 
+                aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+            <ul class="navbar-nav">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{ url_for('index') }}">홈</a>
+                </li>
+            </ul>
+        </div>
+    </nav>
+    
+    <!-- 폼 영역 -->
+    <div class="container mt-4">
+        <h1 class="mb-4">매출처별 거래명세표 출력</h1>
+        <form method="POST" action="{{ url_for('download_client_orders') }}">
+            {{ form.hidden_tag() }}
+            <div class="form-group">
+                {{ form.client_code.label(class="form-label") }}
+                {{ form.client_code(class="form-control select2") }}
+            </div>
+            <div class="form-row">
+                <div class="form-group col-md-6">
+                    {{ form.from_date.label(class="form-label") }}
+                    {{ form.from_date(class="form-control") }}
+                </div>
+                <div class="form-group col-md-6">
+                    {{ form.to_date.label(class="form-label") }}
+                    {{ form.to_date(class="form-control") }}
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary">{{ form.submit.label.text }}</button>
+        </form>
+    </div>
+    
+    <!-- Bootstrap, jQuery 및 Select2 JS 추가 -->
+    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.0/dist/umd/popper.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/js/bootstrap.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/js/select2.min.js"></script>
+    <script>
+        $(document).ready(function(){
+            $('.select2').select2({
+                placeholder: "매출처를 검색 및 선택하세요",
+                allowClear: true
+            });
+            // 폼 제출 시 커서를 모래시계(대기 커서)로 변경
+            $('form').on('submit', function(){
+                document.body.style.cursor = 'wait';
+            });
+        });
+    </script>
+</body>
+</html>
