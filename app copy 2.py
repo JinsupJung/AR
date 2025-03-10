@@ -25,9 +25,7 @@ import tempfile
 import subprocess
 import uuid
 import threading
-# PDF 병합용
-from PyPDF2 import PdfMerger
-from flask import send_file
+
 # PDF 출력용 0107 추가
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
@@ -113,7 +111,7 @@ COLUMN_MAPPING = {
 SUPPLIER_INFO = {
     '등록번호': '112-81-22058',
     '상호 (법인명)': '(주) 놀부',
-    '성명': '김용위',
+    '성명': '한은수, 김용위',
     '주소': '서울특별시 강남구 영동대로 701, W타워 14~15층'
 }
 
@@ -263,76 +261,8 @@ def fetch_client_data(engine, from_date, to_date, client_code):
         logging.error(f"매출처 데이터 조회 중 오류 발생: {e}", exc_info=True)
         return None
 
-# def export_client_orders_to_files(from_date, to_date, client_code):
-#     logging.debug("export_client_orders_to_files 함수 시작 (일자별 출력)")
-#     logging.info(f"매개변수: from_date={from_date}, to_date={to_date}, client_code='{client_code}'")
-    
-#     engine = get_sqlalchemy_engine()
-#     if engine is None:
-#         logging.error("SQLAlchemy 엔진 생성 실패")
-#         raise ConnectionError("SQLAlchemy 엔진 생성 실패")
-    
-#     df = fetch_client_data(engine, from_date, to_date, client_code)
-#     logging.info(f"fetch_client_data 완료: {len(df)} 행 조회됨")
-#     if df.empty:
-#         logging.error("조회된 데이터가 없습니다.")
-#         raise ValueError("조회된 데이터가 없습니다.")
-    
-#     try:
-#         df['order_date'] = pd.to_datetime(df['order_date'], errors='coerce').dt.strftime('%Y-%m-%d')
-#         logging.debug("데이터 전처리 완료")
-#     except Exception as e:
-#         logging.error(f"데이터 전처리 오류: {e}", exc_info=True)
-#         raise e
-
-#     file_paths = []
-#     # 항상 'order_date'와 'client_code'로 그룹화합니다.
-#     grouped = df.groupby(['order_date', 'client_code'])
-    
-#     for group_keys, group in grouped:
-#         day_str, client_grp = group_keys
-#         logging.info(f"처리 그룹: order_date={day_str}, client_code={client_grp}")
-#         try:
-#             wb, ws = load_excel_template()
-#             client_name = group['client_name'].iloc[0] if 'client_name' in group.columns else "unknown"
-#             excel_path = generate_excel_file(wb, ws, client_name, day_str, group)
-#             file_paths.append(excel_path)
-#             logging.info(f"{day_str} 엑셀 파일 생성 완료: {excel_path}")
-#             try:
-#                 pdf_path = convert_excel_to_pdf(excel_path, OUTPUT_FOLDER)
-#                 file_paths.append(pdf_path)
-#                 logging.info(f"{day_str} PDF 파일 생성 완료: {pdf_path}")
-#             except Exception as e:
-#                 logging.error(f"PDF 변환 오류 ({day_str}): {e}", exc_info=True)
-#         except Exception as e:
-#             logging.error(f"엑셀 파일 생성 오류 (order_date={day_str}, client_code={client_grp}): {e}", exc_info=True)
-    
-#     logging.debug("export_client_orders_to_files 함수 종료 (일자별 출력)")
-#     return file_paths
-
-# def generate_excel_file(wb, ws, client_name, order_date, group):
-#     try:
-#         client_info = {
-#             'full_name': group['full_name'].iloc[0],
-#             'reg_no': group['reg_no'].iloc[0],
-#             'president': group['president'].iloc[0],
-#             'address1': group['address1'].iloc[0]
-#         }
-#         insert_data_to_excel(wb, ws, SUPPLIER_INFO, client_info, order_date, group.to_dict('records'))
-#         sanitized_client_name = re.sub(r'[\\/*?:"<>|]', "_", client_name)  # 파일명에 사용할 수 없는 문자를 _로 대체
-#         sanitized_order_date = order_date.replace('-', '')
-#         if sanitized_client_name == "":
-#             sanitized_client_name = "unknown"
-#         output_filename = f"거래명세표_{sanitized_client_name}_{sanitized_order_date}.xlsx"
-#         output_path = os.path.join(OUTPUT_FOLDER, output_filename)
-#         wb.save(output_path)
-#         logging.info(f"엑셀 파일이 성공적으로 저장되었습니다: {output_path}")
-#         return output_path
-#     except Exception as e:
-#         logging.error(f"엑셀 파일 생성 중 오류 발생 (고객명: {client_name}, 배송일자: {order_date}): {e}")
-#         raise e
 def export_client_orders_to_files(from_date, to_date, client_code):
-    logging.debug("export_client_orders_to_files 함수 시작 (거래처별 통합 PDF 병합)")
+    logging.debug("export_client_orders_to_files 함수 시작 (일자별 출력)")
     logging.info(f"매개변수: from_date={from_date}, to_date={to_date}, client_code='{client_code}'")
     
     engine = get_sqlalchemy_engine()
@@ -353,94 +283,42 @@ def export_client_orders_to_files(from_date, to_date, client_code):
         logging.error(f"데이터 전처리 오류: {e}", exc_info=True)
         raise e
 
-    if not os.path.exists(OUTPUT_FOLDER):
-        os.makedirs(OUTPUT_FOLDER)
-        logging.info(f"출력 폴더 생성: {OUTPUT_FOLDER}")
+    file_paths = []
+    # 항상 'order_date'와 'client_code'로 그룹화합니다.
+    grouped = df.groupby(['order_date', 'client_code'])
     
-    merged_file_paths = []  # 각 거래처별 최종 merged pdf 파일 경로 저장
-
-    # 거래처별 그룹화 (client_code 기준)
-    grouped_clients = df.groupby(['client_code'])
-    logging.info(f"기간 {from_date} ~ {to_date} 데이터: {len(grouped_clients)} 거래처 그룹")
-    
-    for client_code, client_group in grouped_clients:
-        client_name = client_group['client_name'].iloc[0] if 'client_name' in client_group.columns else "unknown"
-        logging.info(f"Processing client_code: {client_code}, client_name: {client_name}")
-        
-        daily_pdf_files = []  # 해당 거래처의 일자별 PDF 파일 목록 (tuple: (order_date, pdf_path))
-        
-        # 거래일자별 그룹화
-        grouped_dates = client_group.groupby(['order_date'])
-        for order_date, group in grouped_dates:
-            logging.info(f"처리 일자: {order_date} (client: {client_code})")
-            try:
-                wb, ws = load_excel_template()
-            except Exception as e:
-                logging.error(f"엑셀 템플릿 로드 오류: {e}")
-                continue
-            try:
-                # generate_excel_file() 함수는 개별 일자별 엑셀과 PDF를 생성함
-                excel_path = generate_excel_file(wb, ws, client_name, order_date, group)
-                logging.info(f"{order_date} 엑셀 파일 생성 완료: {excel_path}")
-            except Exception as e:
-                logging.error(f"엑셀 파일 생성 오류 (client_code: {client_code}, order_date: {order_date}): {e}", exc_info=True)
-                continue
+    for group_keys, group in grouped:
+        day_str, client_grp = group_keys
+        logging.info(f"처리 그룹: order_date={day_str}, client_code={client_grp}")
+        try:
+            wb, ws = load_excel_template()
+            client_name = group['client_name'].iloc[0] if 'client_name' in group.columns else "unknown"
+            excel_path = generate_excel_file(wb, ws, client_name, day_str, group)
+            file_paths.append(excel_path)
+            logging.info(f"{day_str} 엑셀 파일 생성 완료: {excel_path}")
             try:
                 pdf_path = convert_excel_to_pdf(excel_path, OUTPUT_FOLDER)
-                daily_pdf_files.append((order_date, pdf_path))
-                logging.info(f"{order_date} PDF 파일 생성 완료: {pdf_path}")
+                file_paths.append(pdf_path)
+                logging.info(f"{day_str} PDF 파일 생성 완료: {pdf_path}")
             except Exception as e:
-                logging.error(f"PDF 변환 오류 (client_code: {client_code}, order_date: {order_date}): {e}", exc_info=True)
-                continue
-        
-        if daily_pdf_files:
-            # 정렬: 날짜 오름차순 정렬 (order_date가 "YYYY-MM-DD" 형식이므로 문자열 정렬 가능)
-            daily_pdf_files.sort(key=lambda x: x[0])
-            pdf_paths = [pdf for date, pdf in daily_pdf_files]
-            final_filename = f"거래명세표_{client_name}_{from_date.replace('-', '')}_{to_date.replace('-', '')}.pdf"
-            final_merged_pdf = os.path.join(OUTPUT_FOLDER, final_filename)
-            try:
-                merger = PdfMerger()
-                for pdf in pdf_paths:
-                    merger.append(pdf)
-                merger.write(final_merged_pdf)
-                merger.close()
-                logging.info(f"최종 PDF 병합 완료 for client {client_code}: {final_merged_pdf}")
-                merged_file_paths.append(final_merged_pdf)
-            except Exception as e:
-                logging.error(f"최종 PDF 병합 오류 for client {client_code}: {e}", exc_info=True)
-                continue
-        else:
-            logging.error(f"생성된 PDF 파일이 없습니다 for client {client_code}.")
+                logging.error(f"PDF 변환 오류 ({day_str}): {e}", exc_info=True)
+        except Exception as e:
+            logging.error(f"엑셀 파일 생성 오류 (order_date={day_str}, client_code={client_grp}): {e}", exc_info=True)
     
-    if merged_file_paths:
-        # 만약 한 거래처만 선택되었다면 리스트의 첫 번째 파일을 반환하거나,
-        # 여러 거래처의 최종 PDF 파일 목록을 반환할 수 있습니다.
-        # 여기서는 최종 PDF 파일 목록(거래처별)이 반환됩니다.
-        return merged_file_paths
-    else:
-        logging.error("생성된 병합 PDF 파일이 없습니다.")
-        raise ValueError("생성된 병합 PDF 파일이 없습니다.")
-
+    logging.debug("export_client_orders_to_files 함수 종료 (일자별 출력)")
+    return file_paths
 
 def generate_excel_file(wb, ws, client_name, order_date, group):
     try:
-        # order_date가 tuple인 경우 첫 번째 요소를 사용
-        if isinstance(order_date, tuple):
-            order_date_str = order_date[0]
-        else:
-            order_date_str = order_date
-
         client_info = {
             'full_name': group['full_name'].iloc[0],
             'reg_no': group['reg_no'].iloc[0],
             'president': group['president'].iloc[0],
             'address1': group['address1'].iloc[0]
         }
-        # wb를 첫번째 인자로 전달 (ws는 두번째)
-        insert_data_to_excel(wb, ws, SUPPLIER_INFO, client_info, order_date_str, group.to_dict('records'))
-        sanitized_client_name = re.sub(r'[\\/*?:"<>|]', "_", client_name)
-        sanitized_order_date = order_date_str.replace('-', '')
+        insert_data_to_excel(wb, ws, SUPPLIER_INFO, client_info, order_date, group.to_dict('records'))
+        sanitized_client_name = re.sub(r'[\\/*?:"<>|]', "_", client_name)  # 파일명에 사용할 수 없는 문자를 _로 대체
+        sanitized_order_date = order_date.replace('-', '')
         if sanitized_client_name == "":
             sanitized_client_name = "unknown"
         output_filename = f"거래명세표_{sanitized_client_name}_{sanitized_order_date}.xlsx"
@@ -449,7 +327,7 @@ def generate_excel_file(wb, ws, client_name, order_date, group):
         logging.info(f"엑셀 파일이 성공적으로 저장되었습니다: {output_path}")
         return output_path
     except Exception as e:
-        logging.error(f"엑셀 파일 생성 중 오류 발생 (고객명: {client_name}, 거래일자: {order_date}): {e}")
+        logging.error(f"엑셀 파일 생성 중 오류 발생 (고객명: {client_name}, 배송일자: {order_date}): {e}")
         raise e
 
 def insert_data_to_excel(wb, ws, supplier_info, client_info, order_date, data_rows):
@@ -572,35 +450,35 @@ def export_orders_to_files(order_date):
     setup_export_logging()
     engine = get_sqlalchemy_engine()
     if engine is None:
-        logging.error("SQLAlchemy 엔진 생성 실패")
-        raise ConnectionError("SQLAlchemy 엔진 생성 실패")
+        logging.error("SQLAlchemy 엔진 생성에 실패하여 ETL 프로세스를 종료합니다.")
+        raise ConnectionError("SQLAlchemy 엔진 생성에 실패했습니다.")
     df = fetch_data(engine, order_date)
     if df is None or df.empty:
-        logging.error("데이터 조회 실패 또는 데이터 없음")
-        raise ValueError("데이터 조회 실패 또는 데이터 없음")
+        logging.error("데이터 조회에 실패하거나 데이터가 없습니다.")
+        raise ValueError("데이터 조회에 실패하거나 데이터가 없습니다.")
     grouped = df.groupby(['client_code'])
-    logging.info(f"배송일자 {order_date} 데이터: {len(grouped)} 거래처 그룹")
+    logging.info(f"배송일자 {order_date}에 대한 데이터는 {len(grouped)}개의 거래처로 나뉩니다.")
     if not os.path.exists(OUTPUT_FOLDER):
         os.makedirs(OUTPUT_FOLDER)
-        logging.info(f"출력 폴더 생성: {OUTPUT_FOLDER}")
-    file_paths = []
+        logging.info(f"출력 폴더를 생성했습니다: {OUTPUT_FOLDER}")
+    file_paths = []  # 생성된 파일 경로를 저장할 리스트
     for client_code, group in grouped:
         client_name = group['client_name'].iloc[0]
         logging.info(f"Processing client_code: {client_code}, client_name: {client_name}")
         try:
             df_processed = group.copy()
-            df_processed = preprocess_data(df_processed)
+            df_processed = preprocess_data(group)
         except Exception as e:
-            logging.error(f"전처리 오류 (client_code: {client_code}): {e}")
-            continue
+            logging.error(f"데이터 전처리 중 오류 발생 (client_code: {client_code}): {e}")
+            continue  # 다음 그룹으로 넘어가기
         if pd.isna(client_name) or client_name.strip() == "":
-            logging.error(f"클라이언트 이름 누락 (client_code: {client_code}). 건너뜀.")
-            continue
+            logging.error(f"클라이언트 이름이 누락되었습니다 (client_code: {client_code}). PDF 및 엑셀 생성을 건너뜁니다.")
+            continue  # 클라이언트 이름이 없으면 건너뜀
         try:
             wb, ws = load_excel_template()
         except Exception as e:
-            logging.error(f"엑셀 템플릿 로드 오류: {e}")
-            continue
+            logging.error(f"엑셀 템플릿 로드 중 오류 발생: {e}")
+            continue  # 다음 그룹으로 넘어가기
         try:
             excel_path = generate_excel_file(wb, ws, client_name, order_date, df_processed)
             file_paths.append(excel_path)
@@ -613,26 +491,9 @@ def export_orders_to_files(order_date):
                 logging.error(f"PDF 변환 오류 (client_code: {client_code}, order_date: {order_date}): {e}")
         except Exception as e:
             logging.error(f"엑셀 파일 생성 오류 (client_code: {client_code}, order_date: {order_date}): {e}")
-    logging.info("모든 개별 PDF 파일 생성 완료. 병합 시작.")
-    if file_paths:
-        merged_pdf_path = os.path.join(OUTPUT_FOLDER, f"merged_orders_{order_date}.pdf")
-        try:
-            merger = PdfMerger()
-            # file_paths 리스트에서 PDF 파일만 선택 (확장자가 .pdf)
-            pdf_files = [fp for fp in file_paths if fp.lower().endswith('.pdf')]
-            for pdf in pdf_files:
-                merger.append(pdf)
-            merger.write(merged_pdf_path)
-            merger.close()
-            logging.info(f"PDF 병합 완료: {merged_pdf_path}")
-            return merged_pdf_path
-        except Exception as e:
-            logging.error(f"PDF 병합 오류: {e}", exc_info=True)
-            raise e
-    else:
-        logging.error("생성된 PDF 파일이 없습니다.")
-        raise ValueError("생성된 PDF 파일이 없습니다.")
-    
+    logging.info("모든 파일 생성 완료.")
+    return file_paths
+
 def setup_export_logging():
     logging.basicConfig(
         level=logging.INFO,
@@ -725,120 +586,10 @@ def download_client_orders_form():
 # ------------------------
 # 라우트: 매출처/일자 범위 거래명세표 생성 요청 (백그라운드 처리)
 # ------------------------
-# @app.route('/download_client_orders', methods=['POST'])
-# def download_client_orders():
-#     form = DownloadClientOrdersForm()
-#     # POST 요청 시 client_code 선택지를 재설정
-#     db = get_db_connection()
-#     if db:
-#         try:
-#             with db.cursor(dictionary=True) as cursor:
-#                 cursor.execute("SELECT chain_no, full_name FROM cm_chain ORDER BY full_name")
-#                 clients = cursor.fetchall()
-#                 form.client_code.choices = [('', '전체매출처')] + [
-#                     (client['chain_no'], f"{client['chain_no']} - {client['full_name']}")
-#                     for client in clients
-#                 ]
-#             logging.info(f"POST: client_code 선택지 재설정 완료. {form.client_code.choices}")
-#         except Exception as e:
-#             logging.error(f"cm_chain 조회 오류 (POST): {e}", exc_info=True)
-#             form.client_code.choices = [('', '전체매출처')]
-#         finally:
-#             db.close()
-#     else:
-#         form.client_code.choices = [('', '전체매출처')]
-
-#     if form.validate_on_submit():
-#         client_code = form.client_code.data.strip() if form.client_code.data else ""
-#         from_date = form.from_date.data.strftime('%Y-%m-%d')
-#         to_date = form.to_date.data.strftime('%Y-%m-%d')
-#         logging.info(f"매출처 거래명세표 생성 요청 - client_code: '{client_code}', 기간: {from_date} ~ {to_date}")
-#         try:
-#             task_id = str(uuid.uuid4())
-#             insert_task(task_id, 'pending')
-#             thread = threading.Thread(target=background_export_client_orders, args=(from_date, to_date, client_code, task_id))
-#             thread.start()
-#             flash("파일 생성 작업이 백그라운드에서 시작되었습니다. 작업 완료 후 다운로드 페이지에서 확인하세요.", "info")
-#             return redirect(url_for('download_client_orders_status', task_id=task_id))
-#         except Exception as e:
-#             logging.error(f"매출처 거래명세표 생성 오류: {e}", exc_info=True)
-#             flash(f"매출처 거래명세표 생성 중 오류가 발생했습니다: {e}", 'danger')
-#             return redirect(url_for('download_client_orders_form'))
-#     else:
-#         logging.error(f"DownloadClientOrdersForm: 폼 검증 실패 - {form.errors}")
-#         for field, errors in form.errors.items():
-#             for error in errors:
-#                 flash(f"{getattr(form, field).label.text} - {error}", 'danger')
-#         return redirect(url_for('download_client_orders_form'))
-
-# ------------------------
-# 라우트: 백그라운드 작업 상태 및 다운로드 페이지
-# ------------------------
-# @app.route('/download_client_orders_status', methods=['GET'])
-# def download_client_orders_status():
-#     task_id = request.args.get('task_id', None)
-#     if not task_id:
-#         flash("작업 ID가 제공되지 않았습니다.", "danger")
-#         return redirect(url_for('download_client_orders_form'))
-#     task = get_task(task_id)
-#     if not task:
-#         flash("유효하지 않은 작업 ID입니다.", "danger")
-#         return redirect(url_for('download_client_orders_form'))
-#     if task['status'] == 'pending':
-#         return render_template('download_client_orders_status.html', status="진행중", task_id=task_id)
-#     elif task['status'] == 'failed':
-#         flash(f"작업 실패: {task['result']}", "danger")
-#         return redirect(url_for('download_client_orders_form'))
-#     elif task['status'] == 'complete':
-#         # 결과로 저장된 파일 경로 목록(JSON 문자열)을 복원
-#         try:
-#             file_paths = json.loads(task['result'])
-#         except Exception as e:
-#             logging.error(f"작업 결과 파싱 오류: {e}", exc_info=True)
-#             flash("작업 결과를 처리하는 중 오류가 발생했습니다.", "danger")
-#             return redirect(url_for('download_client_orders_form'))
-#         # ZIP 파일 생성 후 다운로드
-#         if file_paths:
-#             with tempfile.TemporaryDirectory() as tmpdirname:
-#                 zip_filename = f"거래명세표_{task_id}.zip"
-#                 zip_path = os.path.join(tmpdirname, zip_filename)
-#                 with ZipFile(zip_path, 'w') as zipf:
-#                     for file_path in file_paths:
-#                         zipf.write(file_path, os.path.basename(file_path))
-#                 return send_from_directory(
-#                     directory=tmpdirname,
-#                     path=zip_filename,
-#                     as_attachment=True,
-#                     download_name=zip_filename
-#                 )
-#         else:
-#             flash("생성된 파일이 없습니다.", "danger")
-#             return redirect(url_for('download_client_orders_form'))
-#     else:
-#         flash("알 수 없는 작업 상태입니다.", "danger")
-#         return redirect(url_for('download_client_orders_form'))
-# ------------------------
-# Background task function
-# ------------------------
-def background_export_client_orders(from_date, to_date, client_code, task_id):
-    try:
-        logging.info(f"백그라운드 작업 시작: task_id={task_id}")
-        # This function should merge the individual PDF files and return the final merged PDF path.
-        final_pdf = export_client_orders_to_files(from_date, to_date, client_code)
-        # Always store a list of file paths (even if one file)
-        update_task_status(task_id, 'complete', json.dumps([final_pdf]))
-        logging.info(f"백그라운드 작업 완료: task_id={task_id}")
-    except Exception as e:
-        logging.error(f"백그라운드 작업 오류 (task_id={task_id}): {e}", exc_info=True)
-        update_task_status(task_id, 'failed', str(e))
-
-# ------------------------
-# Route: 요청을 받으면 start background task and show status page
-# ------------------------
 @app.route('/download_client_orders', methods=['POST'])
 def download_client_orders():
     form = DownloadClientOrdersForm()
-    # Reset choices on POST
+    # POST 요청 시 client_code 선택지를 재설정
     db = get_db_connection()
     if db:
         try:
@@ -849,7 +600,7 @@ def download_client_orders():
                     (client['chain_no'], f"{client['chain_no']} - {client['full_name']}")
                     for client in clients
                 ]
-            logging.info(f"POST: client_code 선택지 재설정 완료. Choices: {form.client_code.choices}")
+            logging.info(f"POST: client_code 선택지 재설정 완료. {form.client_code.choices}")
         except Exception as e:
             logging.error(f"cm_chain 조회 오류 (POST): {e}", exc_info=True)
             form.client_code.choices = [('', '전체매출처')]
@@ -866,12 +617,10 @@ def download_client_orders():
         try:
             task_id = str(uuid.uuid4())
             insert_task(task_id, 'pending')
-            thread = threading.Thread(target=background_export_client_orders,
-                                      args=(from_date, to_date, client_code, task_id))
+            thread = threading.Thread(target=background_export_client_orders, args=(from_date, to_date, client_code, task_id))
             thread.start()
-            flash("파일 생성 작업이 백그라운드에서 시작되었습니다. 잠시 후 '다운로드 상태' 페이지를 새로고침해 주세요.", "info")
-            # Instead of redirecting immediately, render a status page
-            return render_template('download_client_orders_status.html', task_id=task_id)
+            flash("파일 생성 작업이 백그라운드에서 시작되었습니다. 작업 완료 후 다운로드 페이지에서 확인하세요.", "info")
+            return redirect(url_for('download_client_orders_status', task_id=task_id))
         except Exception as e:
             logging.error(f"매출처 거래명세표 생성 오류: {e}", exc_info=True)
             flash(f"매출처 거래명세표 생성 중 오류가 발생했습니다: {e}", 'danger')
@@ -883,189 +632,9 @@ def download_client_orders():
                 flash(f"{getattr(form, field).label.text} - {error}", 'danger')
         return redirect(url_for('download_client_orders_form'))
 
-
-@app.route('/api/task_status', methods=['GET'])
-def api_task_status():
-    task_id = request.args.get('task_id')
-    if not task_id:
-        return jsonify({'error': 'No task_id provided'}), 400
-    task = get_task(task_id)
-    if not task:
-        return jsonify({'error': 'Invalid task_id'}), 404
-    # Return only the relevant fields.
-    return jsonify({
-        'task_id': task_id,
-        'status': task.get('status', ''),
-        'result': task.get('result', '')
-    })
-
 # ------------------------
-# Route: Status page (polled or auto-refreshed) and final download
+# 라우트: 백그라운드 작업 상태 및 다운로드 페이지
 # ------------------------
-def merge_client_pdfs(from_date, to_date):
-    """
-    OUTPUT_FOLDER 내의 파일 중 파일명이
-    "거래명세표_{client_name}_{YYYYMMDD}.pdf"인 파일들을
-    거래처별로 그룹화하여, from_date ~ to_date 범위 내의 파일을 병합하고
-    최종 파일명을 "거래명세표_{client_name}_{from_date(YYYYMMDD)}_{to_date(YYYYMMDD)}.pdf"로 생성한다.
-    
-    Returns:
-         dict: {client_name: final_merged_pdf_path, ...}
-    """
-    merged_dict = {}
-    # from_date, to_date: "YYYY-MM-DD" 형식 → 날짜 객체로 변환
-    start_date = datetime.strptime(from_date, "%Y-%m-%d").date()
-    end_date = datetime.strptime(to_date, "%Y-%m-%d").date()
-    
-    # OUTPUT_FOLDER 내의 모든 PDF 파일 목록을 가져옵니다.
-    all_files = os.listdir(OUTPUT_FOLDER)
-    pdf_files = [f for f in all_files if f.lower().endswith('.pdf')]
-    
-    # 파일명 형식: "거래명세표_{client_name}_{YYYYMMDD}.pdf"
-    pattern = r"거래명세표_(.+?)_(\d{8})\.pdf"
-    client_files = {}
-    for filename in pdf_files:
-        match = re.match(pattern, filename)
-        if match:
-            client_name = match.group(1)
-            file_date_str = match.group(2)  # 예: "20250301"
-            try:
-                file_date = datetime.strptime(file_date_str, "%Y%m%d").date()
-            except Exception as e:
-                logging.error(f"파일 날짜 변환 오류: {filename}, {e}")
-                continue
-            # 기간 내 파일만 사용
-            if start_date <= file_date <= end_date:
-                client_files.setdefault(client_name, []).append(os.path.join(OUTPUT_FOLDER, filename))
-    
-    # 각 거래처별로 PDF 병합
-    for client_name, files in client_files.items():
-        # 정렬 (파일명이 날짜순이 되도록 정렬)
-        files.sort()
-        final_filename = f"거래명세표_{client_name}_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.pdf"
-        final_path = os.path.join(OUTPUT_FOLDER, final_filename)
-        try:
-            merger = PdfMerger()
-            for pdf in files:
-                merger.append(pdf)
-            merger.write(final_path)
-            merger.close()
-            logging.info(f"클라이언트 {client_name} 최종 병합 PDF 생성 완료: {final_path}")
-            merged_dict[client_name] = final_path
-        except Exception as e:
-            logging.error(f"클라이언트 {client_name} PDF 병합 오류: {e}", exc_info=True)
-    
-    return merged_dict
-
-# 비동기로 다운로드 잘되는 코드
-# @app.route('/download_client_orders_status', methods=['GET'])
-# def download_client_orders_status():
-#     task_id = request.args.get('task_id', None)
-#     if not task_id:
-#         flash("작업 ID가 제공되지 않았습니다.", "danger")
-#         return redirect(url_for('download_client_orders_form'))
-#     task = get_task(task_id)
-#     if not task:
-#         flash("유효하지 않은 작업 ID입니다.", "danger")
-#         return redirect(url_for('download_client_orders_form'))
-#     if task['status'] == 'pending':
-#         # Render a status page with JavaScript to auto-refresh every few seconds.
-#         return render_template('download_client_orders_status.html', status="진행중", task_id=task_id)
-#     elif task['status'] == 'failed':
-#         flash(f"작업 실패: {task['result']}", "danger")
-#         return redirect(url_for('download_client_orders_form'))
-#     elif task['status'] == 'complete':
-#         try:
-#             file_paths = json.loads(task['result'])
-#         except Exception as e:
-#             logging.error(f"작업 결과 파싱 오류: {e}", exc_info=True)
-#             flash("작업 결과를 처리하는 중 오류가 발생했습니다.", "danger")
-#             return redirect(url_for('download_client_orders_form'))
-#         if file_paths and isinstance(file_paths, list) and len(file_paths) > 0:
-#             zip_filename = f"거래명세표_{task_id}.zip"
-#             zip_path = os.path.join(OUTPUT_FOLDER, zip_filename)
-#             try:
-#                 with ZipFile(zip_path, 'w') as zipf:
-#                     for file_path in file_paths:
-#                         if os.path.isfile(file_path):
-#                             zipf.write(file_path, os.path.basename(file_path))
-#                         else:
-#                             logging.error(f"파일 경로가 파일이 아님: {file_path}")
-#                 logging.info(f"ZIP 파일 생성 완료: {zip_path}")
-#                 return send_file(zip_path, as_attachment=True, download_name=zip_filename)
-#             except Exception as e:
-#                 logging.error(f"ZIP 파일 생성 오류: {e}", exc_info=True)
-#                 flash("파일 압축 중 오류가 발생했습니다.", "danger")
-#                 return redirect(url_for('download_client_orders_form'))
-#         else:
-#             flash("생성된 파일이 없습니다.", "danger")
-#             return redirect(url_for('download_client_orders_form'))
-#     else:
-#         flash("알 수 없는 작업 상태입니다.", "danger")
-#         return redirect(url_for('download_client_orders_form'))
-
-@app.route('/download_client_orders_file', methods=['GET'])
-def download_client_orders_file():
-    task_id = request.args.get('task_id', None)
-    if not task_id:
-        flash("작업 ID가 제공되지 않았습니다.", "danger")
-        return redirect(url_for('download_client_orders_form'))
-    
-    task = get_task(task_id)
-    if not task:
-        flash("유효하지 않은 작업 ID입니다.", "danger")
-        return redirect(url_for('download_client_orders_form'))
-    
-    if task['status'] != 'complete':
-        flash("작업이 아직 완료되지 않았습니다.", "warning")
-        return redirect(url_for('download_client_orders_status', task_id=task_id))
-    
-    try:
-        result = json.loads(task['result'])
-    except Exception as e:
-        logging.error(f"작업 결과 파싱 오류: {e}", exc_info=True)
-        flash("작업 결과를 처리하는 중 오류가 발생했습니다.", "danger")
-        return redirect(url_for('download_client_orders_form'))
-    
-    # result가 리스트가 아닌 경우 리스트로 변환
-    if not isinstance(result, list):
-        result = [result]
-    
-    # 중첩 리스트 평탄화 (이미 정의한 flatten_list 함수 사용)
-    pdf_files = [fp for fp in flatten_list(result)
-                 if isinstance(fp, str) and os.path.isfile(fp) and fp.lower().endswith('.pdf')]
-    
-    if not pdf_files:
-        flash("생성된 PDF 파일이 없습니다.", "danger")
-        return redirect(url_for('download_client_orders_form'))
-    
-    # 모든 PDF 파일을 ZIP 파일로 압축
-    with tempfile.TemporaryDirectory() as tmpdirname:
-        zip_filename = f"거래명세표_{task_id}.zip"
-        zip_path = os.path.join(tmpdirname, zip_filename)
-        try:
-            with ZipFile(zip_path, 'w') as zipf:
-                for pdf in pdf_files:
-                    zipf.write(pdf, os.path.basename(pdf))
-            logging.info(f"ZIP 파일 생성 완료: {zip_path}")
-            response = send_file(zip_path, as_attachment=True, download_name=zip_filename)
-            # 다운로드 후 5초 뒤 download_client_orders_form 화면으로 이동
-            response.headers["Refresh"] = "5; url=" + url_for("download_client_orders_form")
-            return response
-        except Exception as e:
-            logging.error(f"ZIP 파일 생성 오류: {e}", exc_info=True)
-            flash("파일 압축 중 오류가 발생했습니다.", "danger")
-            return redirect(url_for('download_client_orders_form'))
-
-def flatten_list(lst):
-    """중첩 리스트를 평탄화하는 함수"""
-    flat = []
-    for item in lst:
-        if isinstance(item, list):
-            flat.extend(flatten_list(item))
-        else:
-            flat.append(item)
-    return flat
 @app.route('/download_client_orders_status', methods=['GET'])
 def download_client_orders_status():
     task_id = request.args.get('task_id', None)
@@ -1076,45 +645,40 @@ def download_client_orders_status():
     if not task:
         flash("유효하지 않은 작업 ID입니다.", "danger")
         return redirect(url_for('download_client_orders_form'))
-    
     if task['status'] == 'pending':
         return render_template('download_client_orders_status.html', status="진행중", task_id=task_id)
     elif task['status'] == 'failed':
         flash(f"작업 실패: {task['result']}", "danger")
         return redirect(url_for('download_client_orders_form'))
     elif task['status'] == 'complete':
+        # 결과로 저장된 파일 경로 목록(JSON 문자열)을 복원
         try:
             file_paths = json.loads(task['result'])
         except Exception as e:
             logging.error(f"작업 결과 파싱 오류: {e}", exc_info=True)
             flash("작업 결과를 처리하는 중 오류가 발생했습니다.", "danger")
             return redirect(url_for('download_client_orders_form'))
-        
-        # 중첩된 file_paths를 평탄화
-        flat_file_paths = flatten_list(file_paths)
-        # PDF 파일 경로만 선택 (문자열이며 실제 파일이 존재하고 확장자가 .pdf인 경우)
-        pdf_files = [fp for fp in flat_file_paths if isinstance(fp, str) and os.path.isfile(fp) and fp.lower().endswith('.pdf')]
-        
-        if pdf_files:
-            zip_filename = f"거래명세표_{task_id}.zip"
+        # ZIP 파일 생성 후 다운로드
+        if file_paths:
             with tempfile.TemporaryDirectory() as tmpdirname:
+                zip_filename = f"거래명세표_{task_id}.zip"
                 zip_path = os.path.join(tmpdirname, zip_filename)
-                try:
-                    with ZipFile(zip_path, 'w') as zipf:
-                        for fp in pdf_files:
-                            zipf.write(fp, os.path.basename(fp))
-                    logging.info(f"ZIP 파일 생성 완료: {zip_path}")
-                    return send_file(zip_path, as_attachment=True, download_name=zip_filename)
-                except Exception as e:
-                    logging.error(f"ZIP 파일 생성 오류: {e}", exc_info=True)
-                    flash("파일 압축 중 오류가 발생했습니다.", "danger")
-                    return redirect(url_for('download_client_orders_form'))
+                with ZipFile(zip_path, 'w') as zipf:
+                    for file_path in file_paths:
+                        zipf.write(file_path, os.path.basename(file_path))
+                return send_from_directory(
+                    directory=tmpdirname,
+                    path=zip_filename,
+                    as_attachment=True,
+                    download_name=zip_filename
+                )
         else:
-            flash("생성된 PDF 파일이 없습니다.", "danger")
+            flash("생성된 파일이 없습니다.", "danger")
             return redirect(url_for('download_client_orders_form'))
     else:
         flash("알 수 없는 작업 상태입니다.", "danger")
         return redirect(url_for('download_client_orders_form'))
+
 
 def etl_process():
     # excel_path_step3 = None  # 초기화

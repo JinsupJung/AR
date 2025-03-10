@@ -3,26 +3,41 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <title>거래명세표 생성 상태</title>
-    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css">
-    <style>
-        body { padding-top: 70px; }
-    </style>
+    <title>작업 상태 확인</title>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 </head>
 <body>
-    <div class="container mt-4">
-        <h1>거래명세표 생성 상태</h1>
-        <p>작업 ID: {{ task_id }}</p>
-        <p>상태: {{ status }}</p>
-        {% if status == "pending" %}
-            <p>작업이 진행 중입니다. 잠시 후 다시 확인해 주세요.</p>
+    <h2>작업 상태: {{ status }}</h2>
+    <div id="status_message">
+        {% if status == "진행중" %}
+            <p>작업이 진행중입니다. 잠시만 기다려 주세요...</p>
         {% elif status == "complete" %}
-            <p>작업이 완료되었습니다. 아래 버튼을 눌러 생성된 파일을 다운로드하세요.</p>
-            <a href="{{ url_for('download_generated_file', task_id=task_id) }}" class="btn btn-success">파일 다운로드</a>
-        {% elif status == "failed" %}
-            <p>작업이 실패했습니다: {{ error }}</p>
+            <p>작업이 완료되었습니다. 파일 다운로드를 시작합니다.</p>
         {% endif %}
-        <a href="{{ url_for('download_client_orders_form') }}" class="btn btn-primary mt-3">돌아가기</a>
     </div>
+    <script>
+        var taskId = "{{ task_id }}";
+        function checkStatus() {
+            $.ajax({
+                url: "{{ url_for('api_task_status') }}",
+                data: { task_id: taskId },
+                type: "GET",
+                success: function(data) {
+                    if(data.status === 'complete') {
+                        // 작업 완료시 자동으로 다운로드 라우트로 이동
+                        window.location.href = "{{ url_for('download_client_orders_file') }}" + "?task_id=" + taskId;
+                    } else if(data.status === 'failed') {
+                        alert("작업이 실패하였습니다: " + data.result);
+                        window.location.href = "{{ url_for('download_client_orders_form') }}";
+                    }
+                },
+                error: function() {
+                    console.log("상태 확인 오류");
+                }
+            });
+        }
+        // 5초마다 상태를 확인합니다.
+        setInterval(checkStatus, 5000);
+    </script>
 </body>
 </html>
