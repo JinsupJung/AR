@@ -478,19 +478,32 @@ def insert_data_to_excel(wb, ws, supplier_info, client_info, order_date, data_ro
     total_order_amount = 0.0
     total_vat = 0.0
     for row in data_rows:
-        try:
-            insert_cell_value(ws, current_row, 1, row['item_name'])
-            insert_cell_value(ws, current_row, 14, row['unit'])
-            insert_cell_value(ws, current_row, 17, float(row['qty']))
-            insert_cell_value(ws, current_row, 21, float(row['unit_price']))
-            insert_cell_value(ws, current_row, 26, float(row['order_amount']))
-            insert_cell_value(ws, current_row, 30, float(row['vat']))
-            total_order_amount += float(row['order_amount'])
-            total_vat += float(row['vat'])
-            current_row +=1
-        except Exception as e:
-            logging.error(f"데이터 삽입 중 오류 발생 (행: {current_row}): {e}")
-            continue  # 다음 행으로 넘어가기
+            try:
+                # 각 행의 값을 float으로 변환
+                qty = float(row['qty'])
+                unit_price = float(row['unit_price'])
+                order_amount = float(row['order_amount'])
+                vat = float(row['vat'])
+                total_amount = float(row['total_amount'])
+
+                # 주문금액이 음수이면 양수로 변경 (부가세도 동일하게)
+                if total_amount < 0:
+                    order_amount *= -1
+                    vat *= -1
+
+                insert_cell_value(ws, current_row, 1, row['item_name'])
+                insert_cell_value(ws, current_row, 14, row['unit'])
+                insert_cell_value(ws, current_row, 17, qty)
+                insert_cell_value(ws, current_row, 21, unit_price)
+                insert_cell_value(ws, current_row, 26, order_amount)
+                insert_cell_value(ws, current_row, 30, vat)
+
+                total_order_amount += order_amount
+                total_vat += vat
+                current_row += 1
+            except Exception as e:
+                logging.error(f"데이터 삽입 중 오류 발생 (행: {current_row}): {e}")
+                continue  # 다음 행으로 넘어가기
     current_row +=1
     try:
         ws['Z43'] = total_order_amount
